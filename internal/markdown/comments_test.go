@@ -31,7 +31,7 @@ func TestConvertComments(t *testing.T) {
 					CreatedTime: "2025-01-15T10:30:00Z",
 				},
 			},
-			want: "## Comments\n\n**Alice** (2025-01-15): This needs clarification.\n\n",
+			want: "## Comments\n\n<!-- gdoc-comment: \n**Alice** (2025-01-15): This needs clarification.\n\n-->\n\n",
 		},
 		{
 			name: "single comment with quoted text",
@@ -43,7 +43,7 @@ func TestConvertComments(t *testing.T) {
 					CreatedTime: "2025-03-20T14:00:00Z",
 				},
 			},
-			want: "## Comments\n\n> the orignal text\n\n**Bob** (2025-03-20): Typo here.\n\n",
+			want: "## Comments\n\n<!-- gdoc-comment: \n> the orignal text\n\n**Bob** (2025-03-20): Typo here.\n\n-->\n\n",
 		},
 		{
 			name: "resolved comment",
@@ -55,7 +55,7 @@ func TestConvertComments(t *testing.T) {
 					Resolved:    true,
 				},
 			},
-			want: "## Comments\n\n**Carol** (2025-02-01) ✓ resolved: Fixed now.\n\n",
+			want: "## Comments\n\n<!-- gdoc-comment: \n**Carol** (2025-02-01) ✓ resolved: Fixed now.\n\n-->\n\n",
 		},
 		{
 			name: "comment with replies",
@@ -78,7 +78,7 @@ func TestConvertComments(t *testing.T) {
 					},
 				},
 			},
-			want: "## Comments\n\n**Dave** (2025-04-10): Should we change this?\n  ↳ **Eve** (2025-04-10): Yes, I agree.\n  ↳ **Dave** (2025-04-10): Done.\n\n",
+			want: "## Comments\n\n<!-- gdoc-comment: \n**Dave** (2025-04-10): Should we change this?\n  ↳ **Eve** (2025-04-10): Yes, I agree.\n  ↳ **Dave** (2025-04-10): Done.\n\n-->\n\n",
 		},
 		{
 			name: "comment with multiline quoted text",
@@ -90,7 +90,7 @@ func TestConvertComments(t *testing.T) {
 					CreatedTime: "2025-05-01T09:00:00Z",
 				},
 			},
-			want: "## Comments\n\n> line one\n> line two\n\n**Frank** (2025-05-01): This paragraph is too long.\n\n",
+			want: "## Comments\n\n<!-- gdoc-comment: \n> line one\n> line two\n\n**Frank** (2025-05-01): This paragraph is too long.\n\n-->\n\n",
 		},
 		{
 			name: "comment with unknown author",
@@ -100,7 +100,7 @@ func TestConvertComments(t *testing.T) {
 					CreatedTime: "2025-06-01T10:00:00Z",
 				},
 			},
-			want: "## Comments\n\n**Unknown** (2025-06-01): Anonymous feedback.\n\n",
+			want: "## Comments\n\n<!-- gdoc-comment: \n**Unknown** (2025-06-01): Anonymous feedback.\n\n-->\n\n",
 		},
 		{
 			name: "comment with no timestamp",
@@ -110,7 +110,7 @@ func TestConvertComments(t *testing.T) {
 					Content: "No date here.",
 				},
 			},
-			want: "## Comments\n\n**Grace**: No date here.\n\n",
+			want: "## Comments\n\n<!-- gdoc-comment: \n**Grace**: No date here.\n\n-->\n\n",
 		},
 		{
 			name: "multiple comments",
@@ -127,7 +127,7 @@ func TestConvertComments(t *testing.T) {
 					CreatedTime: "2025-01-02T00:00:00Z",
 				},
 			},
-			want: "## Comments\n\n**Alice** (2025-01-01): First comment.\n\n> some text\n\n**Bob** (2025-01-02): Second comment.\n\n",
+			want: "## Comments\n\n<!-- gdoc-comment: \n**Alice** (2025-01-01): First comment.\n\n-->\n\n<!-- gdoc-comment: \n> some text\n\n**Bob** (2025-01-02): Second comment.\n\n-->\n\n",
 		},
 	}
 
@@ -145,9 +145,9 @@ func TestConvertComments(t *testing.T) {
 
 func TestFormatTime(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		want    string
+		name  string
+		input string
+		want  string
 	}{
 		{
 			name:  "valid RFC3339",

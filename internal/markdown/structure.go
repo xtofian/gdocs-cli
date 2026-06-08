@@ -8,12 +8,12 @@ import (
 
 // convertParagraphWithFootnotes is the full-featured paragraph converter with
 // anchor and footnote reference support.
-func convertParagraphWithFootnotes(paragraph *docs.Paragraph, style *docs.ParagraphStyle, anchors map[int]string, registerFootnote func(id string)) string {
+func convertParagraphWithFootnotes(paragraph *docs.Paragraph, style *docs.ParagraphStyle, anchors map[int]string, registerFootnote func(id string), registerComment func(id string)) string {
 	if paragraph == nil {
 		return ""
 	}
 
-	text := convertElementsWithFootnotes(paragraph.Elements, anchors, registerFootnote)
+	text := convertElementsWithFootnotes(paragraph.Elements, anchors, registerFootnote, registerComment)
 	text = strings.TrimRight(text, "\n")
 
 	if text == "" {

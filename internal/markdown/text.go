@@ -10,12 +10,12 @@ import (
 
 // convertElementsWithFootnotes processes paragraph elements with anchor and
 // footnote reference support. registerFootnote may be nil to skip footnotes.
-func convertElementsWithFootnotes(elements []*docs.ParagraphElement, anchors map[int]string, registerFootnote func(id string)) string {
+func convertElementsWithFootnotes(elements []*docs.ParagraphElement, anchors map[int]string, registerFootnote func(id string), registerComment func(id string)) string {
 	var builder strings.Builder
 	for _, element := range elements {
 		if element.TextRun != nil {
 			if len(anchors) > 0 {
-				builder.WriteString(textRunWithAnchors(element, anchors))
+				builder.WriteString(textRunWithAnchors(element, anchors, registerComment))
 			} else {
 				builder.WriteString(ConvertTextRun(element.TextRun))
 			}
@@ -113,7 +113,7 @@ func convertParagraphElementsInternal(elements []*docs.ParagraphElement, anchors
 	var builder strings.Builder
 	for _, element := range elements {
 		if element.TextRun != nil {
-			builder.WriteString(textRunWithAnchors(element, anchors))
+			builder.WriteString(textRunWithAnchors(element, anchors, nil))
 		}
 	}
 	return builder.String()
@@ -121,7 +121,7 @@ func convertParagraphElementsInternal(elements []*docs.ParagraphElement, anchors
 
 // textRunWithAnchors renders a text run, injecting HTML comment anchor markers
 // at any character offsets within the run that map to a comment ID.
-func textRunWithAnchors(pe *docs.ParagraphElement, anchors map[int]string) string {
+func textRunWithAnchors(pe *docs.ParagraphElement, anchors map[int]string, registerComment func(id string)) string {
 	tr := pe.TextRun
 	if tr == nil || tr.Content == "" {
 		return ""
@@ -154,6 +154,9 @@ func textRunWithAnchors(pe *docs.ParagraphElement, anchors map[int]string) strin
 			result.WriteString(ApplyTextStyle(content[prev:pos.local], tr.TextStyle))
 		}
 		result.WriteString(fmt.Sprintf("<!-- gdoc-comment: %s -->", pos.id))
+		if registerComment != nil {
+			registerComment(pos.id)
+		}
 		prev = pos.local
 	}
 	if prev < len(content) {

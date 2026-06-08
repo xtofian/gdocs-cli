@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/famasya/gdocs-cli/internal/gdocs"
 	"google.golang.org/api/docs/v1"
 )
 
@@ -135,7 +136,7 @@ func TestConvertElementsWithFootnotes(t *testing.T) {
 		{FootnoteReference: &docs.FootnoteReference{FootnoteId: "fn2"}},
 	}
 
-	got := convertElementsWithFootnotes(elements, nil, register)
+	got := convertElementsWithFootnotes(elements, nil, register, nil)
 	want := "Hello[^fn1] world[^fn2]"
 	if got != want {
 		t.Errorf("convertElementsWithFootnotes() = %q, want %q", got, want)
@@ -219,6 +220,115 @@ func TestConverterFootnotes(t *testing.T) {
 	}
 	if !contains(out, "[^fn-b]: Second footnote.") {
 		t.Errorf("output missing footnote fn-b definition:\n%s", out)
+	}
+}
+
+func TestConverterSections(t *testing.T) {
+	doc := &docs.Document{
+		Title: "Test Sections",
+		Body: &docs.Body{
+			Content: []*docs.StructuralElement{
+				{
+					Paragraph: &docs.Paragraph{
+						ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_1"},
+						Elements: []*docs.ParagraphElement{
+							{StartIndex: 1, TextRun: &docs.TextRun{Content: "First Heading\n"}},
+						},
+					},
+				},
+				{
+					Paragraph: &docs.Paragraph{
+						ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "NORMAL_TEXT"},
+						Elements: []*docs.ParagraphElement{
+							{StartIndex: 15, TextRun: &docs.TextRun{Content: "This is some text with footnote"}},
+							{FootnoteReference: &docs.FootnoteReference{FootnoteId: "fn-1"}},
+							{StartIndex: 48, TextRun: &docs.TextRun{Content: " and a comment"}},
+						},
+					},
+				},
+				{
+					Paragraph: &docs.Paragraph{
+						ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_1"},
+						Elements: []*docs.ParagraphElement{
+							{StartIndex: 62, TextRun: &docs.TextRun{Content: "Second Heading\n"}},
+						},
+					},
+				},
+				{
+					Paragraph: &docs.Paragraph{
+						ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "NORMAL_TEXT"},
+						Elements: []*docs.ParagraphElement{
+							{StartIndex: 77, TextRun: &docs.TextRun{Content: "This is some more text with footnote"}},
+							{FootnoteReference: &docs.FootnoteReference{FootnoteId: "fn-2"}},
+							{StartIndex: 114, TextRun: &docs.TextRun{Content: ".\n"}},
+						},
+					},
+				},
+			},
+		},
+		Footnotes: map[string]docs.Footnote{
+			"fn-1": {
+				FootnoteId: "fn-1",
+				Content: []*docs.StructuralElement{
+					{Paragraph: &docs.Paragraph{
+						Elements: []*docs.ParagraphElement{
+							{TextRun: &docs.TextRun{Content: "First section footnote."}},
+						},
+					}},
+				},
+			},
+			"fn-2": {
+				FootnoteId: "fn-2",
+				Content: []*docs.StructuralElement{
+					{Paragraph: &docs.Paragraph{
+						Elements: []*docs.ParagraphElement{
+							{TextRun: &docs.TextRun{Content: "Second section footnote."}},
+						},
+					}},
+				},
+			},
+		},
+	}
+
+	comments := []gdocs.Comment{
+		{
+			ID:          "comment-1",
+			Author:      "Tester",
+			Content:     "A comment in first section",
+			QuotedText:  "a comment",
+			CreatedTime: "2026-06-08T12:00:00Z",
+		},
+	}
+
+	c := NewConverter(doc)
+	c.SetComments(comments)
+	out, err := c.Convert()
+	if err != nil {
+		t.Fatalf("Convert() error: %v", err)
+	}
+
+	// Verify that the first footnote and comment are placed before the second heading
+	firstSectionEnd := strings.Index(out, "Second Heading")
+	if firstSectionEnd == -1 {
+		t.Fatalf("Second Heading not found in output")
+	}
+
+	firstSectionContent := out[:firstSectionEnd]
+	secondSectionContent := out[firstSectionEnd:]
+
+	if !strings.Contains(firstSectionContent, "[^fn-1]: First section footnote.") {
+		t.Errorf("First section should contain footnote fn-1 definition")
+	}
+	if !strings.Contains(firstSectionContent, "<!-- gdoc-comment: comment-1") {
+		t.Errorf("First section should contain comment-1 definition")
+	}
+	if strings.Contains(secondSectionContent, "[^fn-1]: First section footnote.") {
+		t.Errorf("Second section should not contain footnote fn-1 definition")
+	}
+
+	// Verify that the second footnote is in the second section
+	if !strings.Contains(secondSectionContent, "[^fn-2]: Second section footnote.") {
+		t.Errorf("Second section should contain footnote fn-2 definition")
 	}
 }
 

@@ -8,6 +8,52 @@ import (
 	"github.com/famasya/gdocs-cli/internal/gdocs"
 )
 
+// ConvertSingleComment renders a single comment enclosed in an HTML comment compatible with markdown.
+func ConvertSingleComment(c gdocs.Comment) string {
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("<!-- gdoc-comment: %s\n", c.ID))
+
+	if c.QuotedText != "" {
+		builder.WriteString("> ")
+		builder.WriteString(strings.ReplaceAll(c.QuotedText, "\n", "\n> "))
+		builder.WriteString("\n\n")
+	}
+
+	author := c.Author
+	if author == "" {
+		author = "Unknown"
+	}
+	author = escapeMarkdown(author)
+	builder.WriteString(fmt.Sprintf("**%s**", author))
+	if ts := formatTime(c.CreatedTime); ts != "" {
+		builder.WriteString(fmt.Sprintf(" (%s)", ts))
+	}
+	if c.Resolved {
+		builder.WriteString(" ✓ resolved")
+	}
+	builder.WriteString(": ")
+	builder.WriteString(c.Content)
+	builder.WriteString("\n")
+
+	for _, r := range c.Replies {
+		rAuthor := r.Author
+		if rAuthor == "" {
+			rAuthor = "Unknown"
+		}
+		rAuthor = escapeMarkdown(rAuthor)
+		builder.WriteString(fmt.Sprintf("  ↳ **%s**", rAuthor))
+		if ts := formatTime(r.CreatedTime); ts != "" {
+			builder.WriteString(fmt.Sprintf(" (%s)", ts))
+		}
+		builder.WriteString(": ")
+		builder.WriteString(r.Content)
+		builder.WriteString("\n")
+	}
+
+	builder.WriteString("\n-->")
+	return builder.String()
+}
+
 // ConvertComments renders comments as a markdown section with three subsections:
 // anchored (uniquely located in the document), ambiguous (location unclear), and
 // deleted (the commented-on text no longer exists in the document).
@@ -21,33 +67,30 @@ func ConvertComments(anchored, ambiguous, deleted []gdocs.Comment) string {
 	var builder strings.Builder
 	builder.WriteString("## Comments\n\n")
 
-	// Only add subsection headings when more than one group is non-empty.
-	multiGroup := countNonEmpty(len(anchored) > 0, len(ambiguous) > 0, len(deleted) > 0) > 1
-
 	if len(anchored) > 0 {
-		if multiGroup {
+		// Only add subsection heading for anchored if there's also ambiguous or deleted.
+		if len(ambiguous) > 0 || len(deleted) > 0 {
 			builder.WriteString("### Anchored\n\n")
 		}
 		for _, c := range anchored {
-			renderComment(c, &builder)
+			builder.WriteString(ConvertSingleComment(c))
+			builder.WriteString("\n\n")
 		}
 	}
 
 	if len(ambiguous) > 0 {
-		if multiGroup {
-			builder.WriteString("### Location ambiguous\n\n")
-		}
+		builder.WriteString("### Location ambiguous\n\n")
 		for _, c := range ambiguous {
-			renderComment(c, &builder)
+			builder.WriteString(ConvertSingleComment(c))
+			builder.WriteString("\n\n")
 		}
 	}
 
 	if len(deleted) > 0 {
-		if multiGroup {
-			builder.WriteString("### Deleted content\n\n")
-		}
+		builder.WriteString("### Deleted content\n\n")
 		for _, c := range deleted {
-			renderComment(c, &builder)
+			builder.WriteString(ConvertSingleComment(c))
+			builder.WriteString("\n\n")
 		}
 	}
 
