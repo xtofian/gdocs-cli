@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 
 	"github.com/famasya/gdocs-cli/internal/auth"
@@ -21,6 +22,7 @@ func main() {
 	// Define flags
 	urlFlag := flag.String("url", "", "Google Docs URL (required for normal operation)")
 	configFlag := flag.String("config", "", "Path to OAuth credentials JSON file (defaults to ~/.config/gdocs-cli/config.json)")
+	accessTokenFlag := flag.String("access_token", "", "Path to OAuth access token JSON file (bypasses normal OAuth flow)")
 	initFlag := flag.Bool("init", false, "Initialize OAuth and save token to default location")
 	cleanFlag := flag.Bool("clean", false, "Clean output (suppress all logs, only output markdown)")
 	commentsFlag := flag.Bool("comments", false, "Include document comments in the markdown output")
@@ -38,19 +40,26 @@ func main() {
 		log.SetOutput(io.Discard)
 	}
 
-	// Determine config path (use default if not specified)
-	configPath := *configFlag
-	if configPath == "" {
-		defaultPath, err := getDefaultConfigPath()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+	// Determine config path (use default if not specified), unless bypassed by --access_token
+	configPath := ""
+	if *accessTokenFlag == "" {
+		configPath = *configFlag
+		if configPath == "" {
+			defaultPath, err := getDefaultConfigPath()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			configPath = defaultPath
 		}
-		configPath = defaultPath
 	}
 
-	// Handle init mode
+	// Handle init mode (incompatible with --access_token)
 	if *initFlag {
+		if *accessTokenFlag != "" {
+			fmt.Fprintln(os.Stderr, "Error: --init and --access_token are mutually exclusive")
+			os.Exit(1)
+		}
 		if err := initAuth(configPath); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -67,7 +76,7 @@ func main() {
 	}
 
 	// Run the main logic
-	if err := run(*urlFlag, configPath, *commentsFlag); err != nil {
+	if err := run(*urlFlag, configPath, *accessTokenFlag, *commentsFlag); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -75,7 +84,8 @@ func main() {
 
 // run executes the main logic of the CLI.
 // It handles authentication, document fetching, and markdown conversion.
-func run(docURL, credPath string, includeComments bool) error {
+// If accessTokenPath is non-empty it is used directly (bypassing credPath and the OAuth flow).
+func run(docURL, credPath, accessTokenPath string, includeComments bool) error {
 	ctx := context.Background()
 
 	// Extract document ID from URL
@@ -87,16 +97,22 @@ func run(docURL, credPath string, includeComments bool) error {
 	// Extract tab ID from URL (may be empty)
 	tabID := gdocs.ExtractTabID(docURL)
 
-	// Create authenticator
-	authenticator, err := auth.NewAuthenticator(credPath)
-	if err != nil {
-		return fmt.Errorf("authentication setup failed: %w", err)
-	}
-
 	// Get authenticated HTTP client
-	httpClient, err := authenticator.GetClient(ctx)
-	if err != nil {
-		return fmt.Errorf("authentication failed: %w", err)
+	var httpClient *http.Client
+	if accessTokenPath != "" {
+		httpClient, err = auth.GetClientFromTokenFile(ctx, accessTokenPath)
+		if err != nil {
+			return fmt.Errorf("access token error: %w", err)
+		}
+	} else {
+		authenticator, err := auth.NewAuthenticator(credPath)
+		if err != nil {
+			return fmt.Errorf("authentication setup failed: %w", err)
+		}
+		httpClient, err = authenticator.GetClient(ctx)
+		if err != nil {
+			return fmt.Errorf("authentication failed: %w", err)
+		}
 	}
 
 	// Create Google Docs API client

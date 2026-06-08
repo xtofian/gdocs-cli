@@ -1,8 +1,10 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 
@@ -41,6 +43,16 @@ func LoadToken(path string) (*oauth2.Token, error) {
 	}
 
 	return token, nil
+}
+
+// GetClientFromTokenFile loads an OAuth2 token from a JSON file and returns an HTTP client
+// that uses it via a static token source (no automatic refresh).
+func GetClientFromTokenFile(ctx context.Context, tokenPath string) (*http.Client, error) {
+	token, err := LoadToken(tokenPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load access token: %w", err)
+	}
+	return oauth2.NewClient(ctx, oauth2.StaticTokenSource(token)), nil
 }
 
 // SaveToken writes an OAuth2 token to a file with 0600 permissions.
