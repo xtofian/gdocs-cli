@@ -8,6 +8,41 @@ import (
 	"google.golang.org/api/docs/v1"
 )
 
+// convertElementsWithFootnotes processes paragraph elements with anchor and
+// footnote reference support. registerFootnote may be nil to skip footnotes.
+func convertElementsWithFootnotes(elements []*docs.ParagraphElement, anchors map[int]string, registerFootnote func(id string)) string {
+	var builder strings.Builder
+	for _, element := range elements {
+		if element.TextRun != nil {
+			if len(anchors) > 0 {
+				builder.WriteString(textRunWithAnchors(element, anchors))
+			} else {
+				builder.WriteString(ConvertTextRun(element.TextRun))
+			}
+		} else if element.FootnoteReference != nil && registerFootnote != nil {
+			id := element.FootnoteReference.FootnoteId
+			registerFootnote(id)
+			builder.WriteString(fmt.Sprintf("[^%s]", id))
+		}
+	}
+	return builder.String()
+}
+
+// convertFootnoteContent extracts plain text from a footnote's structural elements.
+func convertFootnoteContent(content []*docs.StructuralElement) string {
+	var parts []string
+	for _, elem := range content {
+		if elem.Paragraph != nil {
+			text := ConvertParagraphElements(elem.Paragraph.Elements)
+			text = strings.TrimSpace(text)
+			if text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 // ConvertTextRun converts a Google Docs TextRun to markdown with formatting.
 func ConvertTextRun(textRun *docs.TextRun) string {
 	if textRun == nil || textRun.Content == "" {

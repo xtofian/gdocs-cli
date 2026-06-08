@@ -1,6 +1,7 @@
 package markdown
 
 import (
+	"strings"
 	"testing"
 
 	"google.golang.org/api/docs/v1"
@@ -121,6 +122,108 @@ func TestConvertTextRun(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConvertElementsWithFootnotes(t *testing.T) {
+	var registered []string
+	register := func(id string) { registered = append(registered, id) }
+
+	elements := []*docs.ParagraphElement{
+		{TextRun: &docs.TextRun{Content: "Hello"}},
+		{FootnoteReference: &docs.FootnoteReference{FootnoteId: "fn1"}},
+		{TextRun: &docs.TextRun{Content: " world"}},
+		{FootnoteReference: &docs.FootnoteReference{FootnoteId: "fn2"}},
+	}
+
+	got := convertElementsWithFootnotes(elements, nil, register)
+	want := "Hello[^fn1] world[^fn2]"
+	if got != want {
+		t.Errorf("convertElementsWithFootnotes() = %q, want %q", got, want)
+	}
+	if len(registered) != 2 || registered[0] != "fn1" || registered[1] != "fn2" {
+		t.Errorf("registered = %v, want [fn1 fn2]", registered)
+	}
+}
+
+func TestConvertFootnoteContent(t *testing.T) {
+	content := []*docs.StructuralElement{
+		{
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "See example.com for details."}},
+				},
+			},
+		},
+	}
+	got := convertFootnoteContent(content)
+	want := "See example.com for details."
+	if got != want {
+		t.Errorf("convertFootnoteContent() = %q, want %q", got, want)
+	}
+}
+
+func TestConverterFootnotes(t *testing.T) {
+	doc := &docs.Document{
+		Title: "Test",
+		Body: &docs.Body{
+			Content: []*docs.StructuralElement{
+				{
+					Paragraph: &docs.Paragraph{
+						ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "NORMAL_TEXT"},
+						Elements: []*docs.ParagraphElement{
+							{TextRun: &docs.TextRun{Content: "Text with footnote"}},
+							{FootnoteReference: &docs.FootnoteReference{FootnoteId: "fn-a"}},
+							{TextRun: &docs.TextRun{Content: " and another"}},
+							{FootnoteReference: &docs.FootnoteReference{FootnoteId: "fn-b"}},
+							{TextRun: &docs.TextRun{Content: ".\n"}},
+						},
+					},
+				},
+			},
+		},
+		Footnotes: map[string]docs.Footnote{
+			"fn-a": {
+				FootnoteId: "fn-a",
+				Content: []*docs.StructuralElement{
+					{Paragraph: &docs.Paragraph{
+						Elements: []*docs.ParagraphElement{
+							{TextRun: &docs.TextRun{Content: "First footnote."}},
+						},
+					}},
+				},
+			},
+			"fn-b": {
+				FootnoteId: "fn-b",
+				Content: []*docs.StructuralElement{
+					{Paragraph: &docs.Paragraph{
+						Elements: []*docs.ParagraphElement{
+							{TextRun: &docs.TextRun{Content: "Second footnote."}},
+						},
+					}},
+				},
+			},
+		},
+	}
+
+	c := NewConverter(doc)
+	out, err := c.Convert()
+	if err != nil {
+		t.Fatalf("Convert() error: %v", err)
+	}
+
+	if !contains(out, "[^fn-a]") || !contains(out, "[^fn-b]") {
+		t.Errorf("output missing footnote references:\n%s", out)
+	}
+	if !contains(out, "[^fn-a]: First footnote.") {
+		t.Errorf("output missing footnote fn-a definition:\n%s", out)
+	}
+	if !contains(out, "[^fn-b]: Second footnote.") {
+		t.Errorf("output missing footnote fn-b definition:\n%s", out)
+	}
+}
+
+func contains(s, substr string) bool {
+	return strings.Contains(s, substr)
 }
 
 func TestConvertParagraphElements(t *testing.T) {
