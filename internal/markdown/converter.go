@@ -15,7 +15,11 @@ type Converter struct {
 	title         string
 	tabName       string
 	comments      []gdocs.Comment
-	anchorOffsets map[int]string // absolute char offset → comment ID
+	anchorOffsets map[int]string   // absolute char offset → comment ID
+	anchoredIDs   map[string]bool  // comment IDs with a unique body anchor
+	ambiguousIDs  map[string]bool  // comment IDs with repeated/missing quoted text
+	deletedIDs    map[string]bool  // comment IDs on text no longer in the document
+	anchorOrder   []string         // anchored comment IDs in document order
 }
 
 // NewConverter creates a new Converter for the given document.
@@ -53,10 +57,23 @@ func NewConverterFromTab(doc *docs.Document, tab *docs.Tab) *Converter {
 	return c
 }
 
-// SetComments sets the comments and builds anchor offset markers for the document body.
+// SetComments sets the comments and resolves their anchor positions in the document body.
 func (c *Converter) SetComments(comments []gdocs.Comment) {
 	c.comments = comments
-	c.anchorOffsets = gdocs.BuildAnchorMap(c.body, comments)
+	res := gdocs.BuildAnchorResult(c.body, comments)
+	c.anchorOffsets = res.Offsets
+	c.anchorOrder = res.AnchoredIDs
+	c.anchoredIDs = toIDSet(res.AnchoredIDs)
+	c.ambiguousIDs = toIDSet(res.AmbiguousIDs)
+	c.deletedIDs = toIDSet(res.DeletedIDs)
+}
+
+func toIDSet(ids []string) map[string]bool {
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	return m
 }
 
 // Convert processes the entire document and returns markdown.
@@ -77,10 +94,11 @@ func (c *Converter) Convert() (string, error) {
 		builder.WriteString(body)
 	}
 
-	// Append comments if present
+	// Append comments if present, split into three groups.
 	if len(c.comments) > 0 {
+		anchored, ambiguous, deleted := c.splitComments()
 		builder.WriteString("\n")
-		builder.WriteString(ConvertComments(c.comments))
+		builder.WriteString(ConvertComments(anchored, ambiguous, deleted))
 	}
 
 	return builder.String(), nil
@@ -103,6 +121,32 @@ func (c *Converter) generateFrontmatter() (string, error) {
 	}
 
 	return frontmatter, nil
+}
+
+// splitComments partitions c.comments into three ordered slices:
+// anchored (in document order), ambiguous, and deleted.
+func (c *Converter) splitComments() (anchored, ambiguous, deleted []gdocs.Comment) {
+	byID := make(map[string]gdocs.Comment, len(c.comments))
+	for _, cm := range c.comments {
+		byID[cm.ID] = cm
+	}
+
+	// Anchored: use the document-order ID list from anchor resolution.
+	for _, id := range c.anchorOrder {
+		if cm, ok := byID[id]; ok {
+			anchored = append(anchored, cm)
+		}
+	}
+
+	// Ambiguous and deleted: preserve the order they appear in c.comments.
+	for _, cm := range c.comments {
+		if c.ambiguousIDs[cm.ID] {
+			ambiguous = append(ambiguous, cm)
+		} else if c.deletedIDs[cm.ID] {
+			deleted = append(deleted, cm)
+		}
+	}
+	return
 }
 
 // convertBody converts the document body to markdown.

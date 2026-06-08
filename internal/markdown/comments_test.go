@@ -133,7 +133,9 @@ func TestConvertComments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ConvertComments(tt.comments)
+			// Pass all test comments as the anchored group; with a single non-empty
+			// group, no subsection headings are emitted, so expected strings are unchanged.
+			got := ConvertComments(tt.comments, nil, nil)
 			if got != tt.want {
 				t.Errorf("ConvertComments() = %q, want %q", got, tt.want)
 			}
