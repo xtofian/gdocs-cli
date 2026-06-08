@@ -24,6 +24,9 @@ func ConvertComments(comments []gdocs.Comment) string {
 			builder.WriteString("\n\n")
 		}
 
+		if c.ID != "" {
+			builder.WriteString(fmt.Sprintf("(id: %s) ", c.ID))
+		}
 		author := c.Author
 		if author == "" {
 			author = "Unknown"

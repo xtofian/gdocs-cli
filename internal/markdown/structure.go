@@ -6,6 +6,48 @@ import (
 	"google.golang.org/api/docs/v1"
 )
 
+// convertParagraphInternal is the anchor-aware version of ConvertParagraph.
+// anchors maps absolute character offset → comment ID.
+func convertParagraphInternal(paragraph *docs.Paragraph, style *docs.ParagraphStyle, anchors map[int]string) string {
+	if paragraph == nil {
+		return ""
+	}
+
+	text := convertParagraphElementsInternal(paragraph.Elements, anchors)
+	text = strings.TrimRight(text, "\n")
+
+	if text == "" {
+		return "\n"
+	}
+
+	if style != nil && style.NamedStyleType != "" {
+		switch style.NamedStyleType {
+		case "TITLE":
+			return "# " + text + "\n\n"
+		case "SUBTITLE":
+			return "## " + text + "\n\n"
+		case "HEADING_1":
+			return "# " + text + "\n\n"
+		case "HEADING_2":
+			return "## " + text + "\n\n"
+		case "HEADING_3":
+			return "### " + text + "\n\n"
+		case "HEADING_4":
+			return "#### " + text + "\n\n"
+		case "HEADING_5":
+			return "##### " + text + "\n\n"
+		case "HEADING_6":
+			return "###### " + text + "\n\n"
+		}
+	}
+
+	if paragraph.Bullet != nil {
+		return convertListItem(text, paragraph.Bullet)
+	}
+
+	return text + "\n\n"
+}
+
 // ConvertParagraph converts a Google Docs paragraph to markdown.
 func ConvertParagraph(paragraph *docs.Paragraph, style *docs.ParagraphStyle) string {
 	if paragraph == nil {

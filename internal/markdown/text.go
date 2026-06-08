@@ -1,6 +1,8 @@
 package markdown
 
 import (
+	"fmt"
+	"sort"
 	"strings"
 
 	"google.golang.org/api/docs/v1"
@@ -66,4 +68,61 @@ func ConvertParagraphElements(elements []*docs.ParagraphElement) string {
 	}
 
 	return builder.String()
+}
+
+// convertParagraphElementsInternal is the anchor-aware version of ConvertParagraphElements.
+func convertParagraphElementsInternal(elements []*docs.ParagraphElement, anchors map[int]string) string {
+	if len(anchors) == 0 {
+		return ConvertParagraphElements(elements)
+	}
+	var builder strings.Builder
+	for _, element := range elements {
+		if element.TextRun != nil {
+			builder.WriteString(textRunWithAnchors(element, anchors))
+		}
+	}
+	return builder.String()
+}
+
+// textRunWithAnchors renders a text run, injecting HTML comment anchor markers
+// at any character offsets within the run that map to a comment ID.
+func textRunWithAnchors(pe *docs.ParagraphElement, anchors map[int]string) string {
+	tr := pe.TextRun
+	if tr == nil || tr.Content == "" {
+		return ""
+	}
+
+	start := int(pe.StartIndex)
+	content := tr.Content
+
+	type anchorPos struct {
+		local int
+		id    string
+	}
+	var positions []anchorPos
+	for offset, id := range anchors {
+		if offset >= start && offset < start+len(content) {
+			positions = append(positions, anchorPos{offset - start, id})
+		}
+	}
+
+	if len(positions) == 0 {
+		return ApplyTextStyle(content, tr.TextStyle)
+	}
+
+	sort.Slice(positions, func(i, j int) bool { return positions[i].local < positions[j].local })
+
+	var result strings.Builder
+	prev := 0
+	for _, pos := range positions {
+		if pos.local > prev {
+			result.WriteString(ApplyTextStyle(content[prev:pos.local], tr.TextStyle))
+		}
+		result.WriteString(fmt.Sprintf("<!-- gdoc-comment: %s -->", pos.id))
+		prev = pos.local
+	}
+	if prev < len(content) {
+		result.WriteString(ApplyTextStyle(content[prev:], tr.TextStyle))
+	}
+	return result.String()
 }

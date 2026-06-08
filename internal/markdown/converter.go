@@ -10,11 +10,12 @@ import (
 
 // Converter handles the conversion of Google Docs to markdown.
 type Converter struct {
-	doc      *docs.Document
-	body     *docs.Body
-	title    string
-	tabName  string
-	comments []gdocs.Comment
+	doc           *docs.Document
+	body          *docs.Body
+	title         string
+	tabName       string
+	comments      []gdocs.Comment
+	anchorOffsets map[int]string // absolute char offset → comment ID
 }
 
 // NewConverter creates a new Converter for the given document.
@@ -52,9 +53,10 @@ func NewConverterFromTab(doc *docs.Document, tab *docs.Tab) *Converter {
 	return c
 }
 
-// SetComments sets the comments to be appended to the markdown output.
+// SetComments sets the comments and builds anchor offset markers for the document body.
 func (c *Converter) SetComments(comments []gdocs.Comment) {
 	c.comments = comments
+	c.anchorOffsets = gdocs.BuildAnchorMap(c.body, comments)
 }
 
 // Convert processes the entire document and returns markdown.
@@ -110,7 +112,7 @@ func (c *Converter) convertBody() string {
 	for _, element := range c.body.Content {
 		// Convert based on element type
 		if element.Paragraph != nil {
-			markdown := ConvertParagraph(element.Paragraph, element.Paragraph.ParagraphStyle)
+			markdown := convertParagraphInternal(element.Paragraph, element.Paragraph.ParagraphStyle, c.anchorOffsets)
 			builder.WriteString(markdown)
 		} else if element.Table != nil {
 			markdown := ConvertTable(element.Table)

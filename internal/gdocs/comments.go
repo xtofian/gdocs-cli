@@ -11,6 +11,8 @@ import (
 
 // Comment represents a simplified Google Docs comment.
 type Comment struct {
+	ID          string // Drive API comment ID
+	Anchor      string // Internal kix.* anchor ID
 	Author      string
 	Content     string
 	QuotedText  string
@@ -36,7 +38,7 @@ func FetchComments(ctx context.Context, httpClient *http.Client, docID string) (
 	var comments []Comment
 	pageToken := ""
 	for {
-		call := srv.Comments.List(docID).Fields("comments(author(displayName),content,quotedFileContent,createdTime,resolved,replies(author(displayName),content,createdTime)),nextPageToken").PageSize(100).Context(ctx)
+		call := srv.Comments.List(docID).Fields("comments(id,anchor,author(displayName),content,quotedFileContent,createdTime,resolved,replies(author(displayName),content,createdTime)),nextPageToken").PageSize(100).Context(ctx)
 		if pageToken != "" {
 			call = call.PageToken(pageToken)
 		}
@@ -50,6 +52,8 @@ func FetchComments(ctx context.Context, httpClient *http.Client, docID string) (
 				continue
 			}
 			comment := Comment{
+				ID:          c.Id,
+				Anchor:      c.Anchor,
 				Content:     c.Content,
 				CreatedTime: c.CreatedTime,
 				Resolved:    c.Resolved,
