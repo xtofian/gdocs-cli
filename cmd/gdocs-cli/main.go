@@ -18,6 +18,27 @@ import (
 //go:embed instruction.txt
 var instructionText string
 
+// commentsMode is a flag value that accepts bare --comments (meaning "all")
+// or --comments=open / --comments=all.
+type commentsMode string
+
+func (c *commentsMode) String() string { return string(*c) }
+
+func (c *commentsMode) Set(s string) error {
+	switch s {
+	case "true", "all": // "true" is what flag sends for a bare boolean-style flag
+		*c = "all"
+	case "open":
+		*c = "open"
+	default:
+		return fmt.Errorf("must be 'all' or 'open'")
+	}
+	return nil
+}
+
+// IsBoolFlag allows --comments without a value (treated as --comments=all).
+func (c *commentsMode) IsBoolFlag() bool { return true }
+
 func main() {
 	// Define flags
 	urlFlag := flag.String("url", "", "Google Docs URL (required for normal operation)")
@@ -25,7 +46,8 @@ func main() {
 	accessTokenFlag := flag.String("access_token", "", "Path to OAuth access token JSON file (bypasses normal OAuth flow)")
 	initFlag := flag.Bool("init", false, "Initialize OAuth and save token to default location")
 	cleanFlag := flag.Bool("clean", false, "Clean output (suppress all logs, only output markdown)")
-	commentsFlag := flag.Bool("comments", false, "Include document comments in the markdown output")
+	var comments commentsMode
+	flag.Var(&comments, "comments", "Include comments: --comments (all) or --comments=open (unresolved only)")
 	instructionFlag := flag.Bool("instruction", false, "Print integration instructions for AI coding agents")
 	flag.Parse()
 
@@ -76,7 +98,7 @@ func main() {
 	}
 
 	// Run the main logic
-	if err := run(*urlFlag, configPath, *accessTokenFlag, *commentsFlag); err != nil {
+	if err := run(*urlFlag, configPath, *accessTokenFlag, comments); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -85,7 +107,7 @@ func main() {
 // run executes the main logic of the CLI.
 // It handles authentication, document fetching, and markdown conversion.
 // If accessTokenPath is non-empty it is used directly (bypassing credPath and the OAuth flow).
-func run(docURL, credPath, accessTokenPath string, includeComments bool) error {
+func run(docURL, credPath, accessTokenPath string, comments commentsMode) error {
 	ctx := context.Background()
 
 	// Extract document ID from URL
@@ -150,14 +172,25 @@ func run(docURL, credPath, accessTokenPath string, includeComments bool) error {
 	}
 
 	// Fetch and attach comments if requested
-	if includeComments {
+	if comments != "" {
 		log.Println("Fetching comments...")
-		comments, err := gdocs.FetchComments(ctx, httpClient, docID)
+		allComments, err := gdocs.FetchComments(ctx, httpClient, docID)
 		if err != nil {
 			return fmt.Errorf("failed to fetch comments: %w", err)
 		}
-		log.Printf("Found %d comment(s)", len(comments))
-		converter.SetComments(comments)
+
+		filtered := allComments
+		if comments == "open" {
+			filtered = filtered[:0]
+			for _, c := range allComments {
+				if !c.Resolved {
+					filtered = append(filtered, c)
+				}
+			}
+		}
+
+		log.Printf("Found %d comment(s) (%d total)", len(filtered), len(allComments))
+		converter.SetComments(filtered)
 	}
 
 	markdownOutput, err := converter.Convert()
