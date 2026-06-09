@@ -2,9 +2,12 @@ package gdocs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
 
 	"google.golang.org/api/drive/v3"
 	"google.golang.org/api/option"
@@ -27,6 +30,113 @@ type Reply struct {
 	Author      string
 	Content     string
 	CreatedTime string
+}
+
+// CommentUpdate represents a comment append request parsed from JSON.
+type CommentUpdate struct {
+	ID            string        `json:"id"`
+	CommentThread []interface{} `json:"comment-thread,omitempty"`
+	NewComment    string        `json:"new-comment,omitempty"`
+	Status        string        `json:"status,omitempty"`
+}
+
+// IsDraft returns true if the update is marked as a draft or has no content.
+func (u *CommentUpdate) IsDraft() bool {
+	return u.Status == "draft" || u.NewComment == ""
+}
+
+// ParseCommentUpdates parses and validates comment updates from an io.Reader.
+func ParseCommentUpdates(r io.Reader) ([]CommentUpdate, error) {
+	var updates []CommentUpdate
+	dec := json.NewDecoder(r)
+	if err := dec.Decode(&updates); err != nil {
+		return nil, fmt.Errorf("failed to decode JSON: %w", err)
+	}
+
+	for i, u := range updates {
+		if !u.IsDraft() && u.ID == "" {
+			return nil, fmt.Errorf("validation error at index %d: comment thread ID ('id') is required for non-draft comments", i)
+		}
+	}
+
+	return updates, nil
+}
+
+// UploadComments reads a JSON file of comments and appends them as replies to existing threads.
+func UploadComments(ctx context.Context, httpClient *http.Client, docID string, jsonPath string) error {
+	f, err := os.Open(jsonPath)
+	if err != nil {
+		return fmt.Errorf("failed to open comments file %s: %w", jsonPath, err)
+	}
+	defer f.Close()
+
+	updates, err := ParseCommentUpdates(f)
+	if err != nil {
+		return fmt.Errorf("failed to parse comments: %w", err)
+	}
+
+	// Filter out drafts first to see if we have anything to upload
+	var activeUpdates []CommentUpdate
+	for _, u := range updates {
+		if u.IsDraft() {
+			continue
+		}
+		activeUpdates = append(activeUpdates, u)
+	}
+
+	if len(activeUpdates) == 0 {
+		return nil
+	}
+
+	// Fetch existing comments to support idempotence checking
+	log.Println("Fetching existing comments to check for duplicates...")
+	existingComments, err := FetchComments(ctx, httpClient, docID)
+	if err != nil {
+		return fmt.Errorf("failed to fetch existing comments for idempotency check: %w", err)
+	}
+
+	commentTexts := make(map[string][]string)
+	for _, c := range existingComments {
+		texts := []string{c.Content}
+		for _, r := range c.Replies {
+			texts = append(texts, r.Content)
+		}
+		commentTexts[c.ID] = texts
+	}
+
+	srv, err := drive.NewService(ctx, option.WithHTTPClient(httpClient))
+	if err != nil {
+		return fmt.Errorf("unable to create Drive service for uploading comments: %w", err)
+	}
+
+	for _, u := range activeUpdates {
+		// Check for duplicates
+		if texts, exists := commentTexts[u.ID]; exists {
+			alreadyPresent := false
+			for _, t := range texts {
+				if t == u.NewComment {
+					alreadyPresent = true
+					break
+				}
+			}
+			if alreadyPresent {
+				log.Printf("Comment already exists in thread %s, skipping.", u.ID)
+				continue
+			}
+		}
+
+		log.Printf("Uploading comment to thread %s...", u.ID)
+		replyBody := &drive.Reply{
+			Content: u.NewComment,
+		}
+		_, err := srv.Replies.Create(docID, u.ID, replyBody).Fields("id").Context(ctx).Do()
+		if err != nil {
+			return fmt.Errorf("failed to append comment to thread %s: %w", u.ID, err)
+		}
+		log.Printf("Successfully uploaded comment to thread %s", u.ID)
+	}
+
+	return nil
 }
 
 // FetchComments retrieves all comments for a document using the Drive API.
@@ -115,4 +225,3 @@ func FetchMobileBasicHTML(ctx context.Context, httpClient *http.Client, docID st
 
 	return string(bodyBytes), nil
 }
-

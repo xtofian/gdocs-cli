@@ -35,9 +35,11 @@ func TestCLIHelp(t *testing.T) {
 		"-init",
 		"-clean",
 		"-instruction",
+		"-upload-comments",
 		"Google Docs URL",
 		"OAuth credentials JSON file",
 		"integration instructions",
+		"upload as replies",
 	}
 
 	for _, expected := range expectedStrings {

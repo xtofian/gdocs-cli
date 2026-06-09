@@ -48,6 +48,7 @@ func main() {
 	cleanFlag := flag.Bool("clean", false, "Clean output (suppress all logs, only output markdown)")
 	var comments commentsMode
 	flag.Var(&comments, "comments", "Include comments: --comments (all) or --comments=open (unresolved only)")
+	uploadCommentsFlag := flag.String("upload-comments", "", "Path to JSON file containing comments to upload as replies to existing threads")
 	instructionFlag := flag.Bool("instruction", false, "Print integration instructions for AI coding agents")
 	flag.Parse()
 
@@ -98,7 +99,7 @@ func main() {
 	}
 
 	// Run the main logic
-	if err := run(*urlFlag, configPath, *accessTokenFlag, comments); err != nil {
+	if err := run(*urlFlag, configPath, *accessTokenFlag, *uploadCommentsFlag, comments); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -107,7 +108,7 @@ func main() {
 // run executes the main logic of the CLI.
 // It handles authentication, document fetching, and markdown conversion.
 // If accessTokenPath is non-empty it is used directly (bypassing credPath and the OAuth flow).
-func run(docURL, credPath, accessTokenPath string, comments commentsMode) error {
+func run(docURL, credPath, accessTokenPath, uploadCommentsPath string, comments commentsMode) error {
 	ctx := context.Background()
 
 	// Extract document ID from URL
@@ -135,6 +136,16 @@ func run(docURL, credPath, accessTokenPath string, comments commentsMode) error 
 		if err != nil {
 			return fmt.Errorf("authentication failed: %w", err)
 		}
+	}
+
+	// Upload comments if requested
+	if uploadCommentsPath != "" {
+		log.Printf("Processing comment updates from %s...", uploadCommentsPath)
+		if err := gdocs.UploadComments(ctx, httpClient, docID, uploadCommentsPath); err != nil {
+			return fmt.Errorf("failed to upload comments: %w", err)
+		}
+		log.Println("Finished processing comment updates.")
+		return nil
 	}
 
 	// Create Google Docs API client

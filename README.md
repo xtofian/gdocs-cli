@@ -188,6 +188,48 @@ This is useful when:
 ./gdocs-cli --url="..." --clean | your-ai-tool
 ```
 
+### Upload Comments (Replies) to Existing Threads
+
+Use the `--upload-comments` flag to append new comments as replies to existing comment threads in the Google Doc using a JSON file:
+
+```bash
+./gdocs-cli --url="https://docs.google.com/document/d/YOUR_DOC_ID/edit" --upload-comments="comments.json"
+```
+
+The comments file must be a JSON array where each entry has:
+- `id`: The Google Drive comment/thread ID (required for active comments).
+- `new-comment`: The comment text to append as a reply.
+- `status` (optional): If set to `"draft"`, the comment is treated as a draft and is **not** uploaded.
+
+**Example `comments.json`:**
+```json
+[
+  {
+    "id": "AAAxyzabc",
+    "comment-thread": [
+      {
+        "commenter": "Joe Reviewer",
+        "date": "2026-05-08",
+        "comment": "You should fix this"
+      }
+    ],
+    "new-comment": "I think you're both wrong.",
+    "status": "ready"
+  },
+  {
+    "id": "BBB123xyz",
+    "new-comment": "This is a draft comment and will not be uploaded.",
+    "status": "draft"
+  }
+]
+```
+
+*Note: The `comment-thread` list in the JSON is informational and is ignored by the tool during upload.*
+
+**Idempotence and Behavior:**
+- **Idempotency**: The upload action is fully idempotent. The tool will automatically fetch the existing comment thread first and skip uploading any replies that already exist with the exact same content.
+- **Early Exit**: When running with `--upload-comments`, the tool will exit immediately after processing comment uploads without fetching the document content or outputting markdown.
+
 ### Print Integration Instructions
 
 Use the `--instruction` flag to print instructions for integrating this tool with AI coding agents:

@@ -3,3 +3,5 @@ access_token.json
 .claude/settings.local.json
 /gdocs
 /gdocs-cli
+sample.md
+sample-comments.json

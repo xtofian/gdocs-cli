@@ -124,6 +124,8 @@ When adding support for new Google Docs features:
 - `--config`: Path to OAuth2 credentials JSON (defaults to `~/.config/gdocs-cli/config.json`)
 - `--init`: Initialize OAuth and save token (doesn't require --url)
 - `--clean`: Suppress all logs, only output markdown
+- `--comments`: Include comments in the output (all or open)
+- `--upload-comments`: Path to JSON file containing comments to upload as replies to existing threads
 - `--instruction`: Print integration instructions for AI coding agents
 
 **Default Config Path**: If `--config` is not provided, the tool automatically looks for credentials at `~/.config/gdocs-cli/config.json`. This is particularly useful for AI agents that can set up credentials once and then use the tool without specifying the path on every invocation.
