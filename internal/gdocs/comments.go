@@ -3,6 +3,7 @@ package gdocs
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 
 	"google.golang.org/api/drive/v3"
@@ -88,3 +89,30 @@ func FetchComments(ctx context.Context, httpClient *http.Client, docID string) (
 
 	return comments, nil
 }
+
+// FetchMobileBasicHTML retrieves the mobilebasic HTML view of a document.
+func FetchMobileBasicHTML(ctx context.Context, httpClient *http.Client, docID string) (string, error) {
+	url := fmt.Sprintf("https://docs.google.com/document/d/%s/mobilebasic", docID)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch mobilebasic HTML: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to fetch mobilebasic HTML: status %d", resp.StatusCode)
+	}
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	return string(bodyBytes), nil
+}
+

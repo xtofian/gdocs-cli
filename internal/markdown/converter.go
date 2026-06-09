@@ -108,13 +108,18 @@ func NewConverterFromTab(doc *docs.Document, tab *docs.Tab) *Converter {
 }
 
 // SetComments sets the comments and resolves their anchor positions in the document body.
-func (c *Converter) SetComments(comments []gdocs.Comment) {
+func (c *Converter) SetComments(comments []gdocs.Comment, mobileBasicHTML string) {
 	c.comments = comments
 	c.commentMap = make(map[string]gdocs.Comment, len(comments))
 	for _, cm := range comments {
 		c.commentMap[cm.ID] = cm
 	}
-	res := gdocs.BuildAnchorResult(c.body, comments)
+	var res gdocs.AnchorResult
+	if mobileBasicHTML != "" {
+		res = gdocs.BuildAnchorResultWithMobileBasic(c.body, comments, mobileBasicHTML)
+	} else {
+		res = gdocs.BuildAnchorResult(c.body, comments)
+	}
 	c.anchorOffsets = res.Offsets
 	c.anchorOrder = res.AnchoredIDs
 	c.anchoredIDs = toIDSet(res.AnchoredIDs)
@@ -242,10 +247,14 @@ func (c *Converter) convertBody() string {
 			}
 
 			registerComment := func(id string) {
+				baseID := id
+				if idx := strings.Index(id, ","); idx != -1 {
+					baseID = id[:idx]
+				}
 				// Only register if it's an anchored comment
-				if c.anchoredIDs[id] && !sec.commentSeen[id] {
-					sec.commentSeen[id] = true
-					sec.commentOrder = append(sec.commentOrder, id)
+				if c.anchoredIDs[baseID] && !sec.commentSeen[baseID] {
+					sec.commentSeen[baseID] = true
+					sec.commentOrder = append(sec.commentOrder, baseID)
 				}
 			}
 

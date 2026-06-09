@@ -301,7 +301,7 @@ func TestConverterSections(t *testing.T) {
 	}
 
 	c := NewConverter(doc)
-	c.SetComments(comments)
+	c.SetComments(comments, "")
 	out, err := c.Convert()
 	if err != nil {
 		t.Fatalf("Convert() error: %v", err)

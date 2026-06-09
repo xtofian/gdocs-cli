@@ -190,7 +190,16 @@ func run(docURL, credPath, accessTokenPath string, comments commentsMode) error 
 		}
 
 		log.Printf("Found %d comment(s) (%d total)", len(filtered), len(allComments))
-		converter.SetComments(filtered)
+
+		var mobileBasicHTML string
+		log.Println("Fetching mobilebasic HTML for precise comment placement...")
+		var mbErr error
+		mobileBasicHTML, mbErr = gdocs.FetchMobileBasicHTML(ctx, httpClient, docID)
+		if mbErr != nil {
+			log.Printf("Warning: failed to fetch mobilebasic HTML (%v); falling back to content-matching anchor placement", mbErr)
+		}
+
+		converter.SetComments(filtered, mobileBasicHTML)
 	}
 
 	markdownOutput, err := converter.Convert()
