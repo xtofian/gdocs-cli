@@ -24,6 +24,8 @@ type Converter struct {
 	footnoteMap   map[string]docs.Footnote // footnote ID → content
 	footnoteOrder []string                 // footnote IDs in document order (preserved for compatibility/legacy, though not used in new design)
 	footnoteSeen  map[string]bool          // tracks which footnote IDs have been registered
+	openCommentsOnly     bool              // whether --comments=open mode is active
+	mobileBasicSucceeded bool              // whether mobilebasic HTML fetch/parse succeeded
 }
 
 type section struct {
@@ -117,6 +119,7 @@ func (c *Converter) SetComments(comments []gdocs.Comment, mobileBasicHTML string
 	var res gdocs.AnchorResult
 	if mobileBasicHTML != "" {
 		res = gdocs.BuildAnchorResultWithMobileBasic(c.body, comments, mobileBasicHTML)
+		c.mobileBasicSucceeded = true
 	} else {
 		res = gdocs.BuildAnchorResult(c.body, comments)
 	}
@@ -125,6 +128,11 @@ func (c *Converter) SetComments(comments []gdocs.Comment, mobileBasicHTML string
 	c.anchoredIDs = toIDSet(res.AnchoredIDs)
 	c.ambiguousIDs = toIDSet(res.AmbiguousIDs)
 	c.deletedIDs = toIDSet(res.DeletedIDs)
+}
+
+// SetOpenCommentsOnly sets whether --comments=open mode is active.
+func (c *Converter) SetOpenCommentsOnly(val bool) {
+	c.openCommentsOnly = val
 }
 
 func toIDSet(ids []string) map[string]bool {
@@ -156,6 +164,10 @@ func (c *Converter) Convert() (string, error) {
 	// Append remaining comments (ambiguous and deleted) if present.
 	if len(c.comments) > 0 {
 		_, ambiguous, deleted := c.splitComments()
+		if c.openCommentsOnly && c.mobileBasicSucceeded {
+			ambiguous = nil
+			deleted = nil
+		}
 		if len(ambiguous) > 0 || len(deleted) > 0 {
 			bodyStr := builder.String()
 			bodyStr = strings.TrimRight(bodyStr, " \t\r\n")

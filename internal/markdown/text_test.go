@@ -418,3 +418,61 @@ func TestConvertParagraphElements(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenCommentsMobileBasicOmission(t *testing.T) {
+	doc := &docs.Document{
+		Body: &docs.Body{
+			Content: []*docs.StructuralElement{
+				{
+					StartIndex: 1,
+					Paragraph: &docs.Paragraph{
+						Elements: []*docs.ParagraphElement{
+							{
+								StartIndex: 1,
+								TextRun: &docs.TextRun{
+									Content: "Unrelated text here.",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	comments := []gdocs.Comment{
+		{
+			ID:          "comment-unanchored",
+			Content:     "This comment can't be matched.",
+			QuotedText:  "nonexistent",
+			CreatedTime: "2026-06-08T12:00:00Z",
+		},
+	}
+
+	// Case 1: openCommentsOnly = true, mobileBasicSucceeded = true
+	// The unplaced comment should NOT populate ## Comments section
+	c1 := NewConverter(doc)
+	c1.SetOpenCommentsOnly(true)
+	c1.SetComments(comments, "<html><body>Unrelated</body></html>")
+	out1, err := c1.Convert()
+	if err != nil {
+		t.Fatalf("Convert() error: %v", err)
+	}
+	if strings.Contains(out1, "## Comments") {
+		t.Errorf("expected ## Comments section to be omitted under openCommentsOnly and mobileBasicSucceeded, but found: %q", out1)
+	}
+
+	// Case 2: openCommentsOnly = false, mobileBasicSucceeded = true
+	// The unplaced comment SHOULD populate ## Comments section
+	c2 := NewConverter(doc)
+	c2.SetOpenCommentsOnly(false)
+	c2.SetComments(comments, "<html><body>Unrelated</body></html>")
+	out2, err := c2.Convert()
+	if err != nil {
+		t.Fatalf("Convert() error: %v", err)
+	}
+	if !strings.Contains(out2, "## Comments") {
+		t.Errorf("expected ## Comments section to be populated when openCommentsOnly = false, but was missing")
+	}
+}
+
