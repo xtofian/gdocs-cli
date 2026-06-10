@@ -8,46 +8,43 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"google.golang.org/api/drive/v3"
 	"google.golang.org/api/option"
 )
 
-// Comment represents a simplified Google Docs comment.
+// Comment represents a simplified Google Docs comment thread.
 type Comment struct {
-	ID          string // Drive API comment ID
-	Anchor      string // Internal kix.* anchor ID
-	Author      string
-	Content     string
-	QuotedText  string
-	CreatedTime string
-	Resolved    bool
-	Replies     []Reply
+	ID          string  `json:"id"`
+	Anchor      string  `json:"anchor,omitempty"`
+	Author      string  `json:"author,omitempty"`
+	AuthorEmail string  `json:"author-email,omitempty"`
+	Content     string  `json:"comment"`
+	QuotedText  string  `json:"quoted-text,omitempty"`
+	CreatedTime string  `json:"created-time,omitempty"`
+	Resolved    bool    `json:"resolved,omitempty"`
+	Replies     []Reply `json:"replies,omitempty"`
+	NewReply    string  `json:"new-reply,omitempty"`
+	Status      string  `json:"status,omitempty"`
 }
 
 // Reply represents a reply to a comment.
 type Reply struct {
-	Author      string
-	Content     string
-	CreatedTime string
-}
-
-// CommentUpdate represents a comment append request parsed from JSON.
-type CommentUpdate struct {
-	ID            string        `json:"id"`
-	CommentThread []interface{} `json:"comment-thread,omitempty"`
-	NewComment    string        `json:"new-comment,omitempty"`
-	Status        string        `json:"status,omitempty"`
+	Author      string `json:"commenter"`
+	AuthorEmail string `json:"commenter-email,omitempty"`
+	Content     string `json:"reply"`
+	CreatedTime string `json:"date,omitempty"`
 }
 
 // IsDraft returns true if the update is marked as a draft or has no content.
-func (u *CommentUpdate) IsDraft() bool {
-	return u.Status == "draft" || u.NewComment == ""
+func (u *Comment) IsDraft() bool {
+	return u.Status == "draft" || u.NewReply == ""
 }
 
 // ParseCommentUpdates parses and validates comment updates from an io.Reader.
-func ParseCommentUpdates(r io.Reader) ([]CommentUpdate, error) {
-	var updates []CommentUpdate
+func ParseCommentUpdates(r io.Reader) ([]Comment, error) {
+	var updates []Comment
 	dec := json.NewDecoder(r)
 	if err := dec.Decode(&updates); err != nil {
 		return nil, fmt.Errorf("failed to decode JSON: %w", err)
@@ -76,7 +73,7 @@ func UploadComments(ctx context.Context, httpClient *http.Client, docID string, 
 	}
 
 	// Filter out drafts first to see if we have anything to upload
-	var activeUpdates []CommentUpdate
+	var activeUpdates []Comment
 	for _, u := range updates {
 		if u.IsDraft() {
 			continue
@@ -114,7 +111,7 @@ func UploadComments(ctx context.Context, httpClient *http.Client, docID string, 
 		if texts, exists := commentTexts[u.ID]; exists {
 			alreadyPresent := false
 			for _, t := range texts {
-				if t == u.NewComment {
+				if t == u.NewReply {
 					alreadyPresent = true
 					break
 				}
@@ -127,7 +124,7 @@ func UploadComments(ctx context.Context, httpClient *http.Client, docID string, 
 
 		log.Printf("Uploading comment to thread %s...", u.ID)
 		replyBody := &drive.Reply{
-			Content: u.NewComment,
+			Content: u.NewReply,
 		}
 		_, err := srv.Replies.Create(docID, u.ID, replyBody).Fields("id").Context(ctx).Do()
 		if err != nil {
@@ -149,7 +146,7 @@ func FetchComments(ctx context.Context, httpClient *http.Client, docID string) (
 	var comments []Comment
 	pageToken := ""
 	for {
-		call := srv.Comments.List(docID).Fields("comments(id,anchor,author(displayName),content,quotedFileContent,createdTime,resolved,replies(author(displayName),content,createdTime)),nextPageToken").PageSize(100).Context(ctx)
+		call := srv.Comments.List(docID).Fields("comments(id,anchor,author(displayName,emailAddress),content,quotedFileContent,createdTime,resolved,replies(author(displayName,emailAddress),content,createdTime,deleted)),nextPageToken").PageSize(100).Context(ctx)
 		if pageToken != "" {
 			call = call.PageToken(pageToken)
 		}
@@ -171,6 +168,10 @@ func FetchComments(ctx context.Context, httpClient *http.Client, docID string) (
 			}
 			if c.Author != nil {
 				comment.Author = c.Author.DisplayName
+				comment.AuthorEmail = c.Author.EmailAddress
+				if c.Author.EmailAddress != "" {
+					log.Printf("Fetched author email for comment %s: %s", c.Id, c.Author.EmailAddress)
+				}
 			}
 			if c.QuotedFileContent != nil {
 				comment.QuotedText = c.QuotedFileContent.Value
@@ -181,10 +182,14 @@ func FetchComments(ctx context.Context, httpClient *http.Client, docID string) (
 				}
 				reply := Reply{
 					Content:     r.Content,
-					CreatedTime: r.CreatedTime,
+					CreatedTime: formatDate(r.CreatedTime),
 				}
 				if r.Author != nil {
 					reply.Author = r.Author.DisplayName
+					reply.AuthorEmail = r.Author.EmailAddress
+					if r.Author.EmailAddress != "" {
+						log.Printf("Fetched reply author email for comment %s: %s", c.Id, r.Author.EmailAddress)
+					}
 				}
 				comment.Replies = append(comment.Replies, reply)
 			}
@@ -224,4 +229,16 @@ func FetchMobileBasicHTML(ctx context.Context, httpClient *http.Client, docID st
 	}
 
 	return string(bodyBytes), nil
+}
+
+// formatDate converts an RFC 3339 timestamp to a short date string (YYYY-MM-DD).
+func formatDate(rfc3339 string) string {
+	if rfc3339 == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339, rfc3339)
+	if err != nil {
+		return ""
+	}
+	return t.Format("2006-01-02")
 }

@@ -1,57 +1,20 @@
 package markdown
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/famasya/gdocs-cli/internal/gdocs"
 )
 
 // ConvertSingleComment renders a single comment enclosed in an HTML comment compatible with markdown.
 func ConvertSingleComment(c gdocs.Comment) string {
-	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf("<!-- gdoc-comment: %s\n", c.ID))
-
-	if c.QuotedText != "" {
-		builder.WriteString("> ")
-		builder.WriteString(strings.ReplaceAll(c.QuotedText, "\n", "\n> "))
-		builder.WriteString("\n\n")
+	data, err := json.MarshalIndent([]gdocs.Comment{c}, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("<!-- gdoc-comment: error encoding comment: %v -->", err)
 	}
-
-	author := c.Author
-	if author == "" {
-		author = "Unknown"
-	}
-	author = escapeMarkdown(author)
-	builder.WriteString(fmt.Sprintf("**%s**", author))
-	if ts := formatTime(c.CreatedTime); ts != "" {
-		builder.WriteString(fmt.Sprintf(" (%s)", ts))
-	}
-	if c.Resolved {
-		builder.WriteString(" ✓ resolved")
-	}
-	builder.WriteString(": ")
-	builder.WriteString(c.Content)
-	builder.WriteString("\n")
-
-	for _, r := range c.Replies {
-		rAuthor := r.Author
-		if rAuthor == "" {
-			rAuthor = "Unknown"
-		}
-		rAuthor = escapeMarkdown(rAuthor)
-		builder.WriteString(fmt.Sprintf("  ↳ **%s**", rAuthor))
-		if ts := formatTime(r.CreatedTime); ts != "" {
-			builder.WriteString(fmt.Sprintf(" (%s)", ts))
-		}
-		builder.WriteString(": ")
-		builder.WriteString(r.Content)
-		builder.WriteString("\n")
-	}
-
-	builder.WriteString("\n-->")
-	return builder.String()
+	return fmt.Sprintf("<!-- gdoc-comment:\n%s\n-->", string(data))
 }
 
 // ConvertComments renders comments as a markdown section with three subsections:
@@ -95,76 +58,4 @@ func ConvertComments(anchored, ambiguous, deleted []gdocs.Comment) string {
 	}
 
 	return builder.String()
-}
-
-func countNonEmpty(flags ...bool) int {
-	n := 0
-	for _, f := range flags {
-		if f {
-			n++
-		}
-	}
-	return n
-}
-
-func renderComment(c gdocs.Comment, builder *strings.Builder) {
-	if c.QuotedText != "" {
-		builder.WriteString("> ")
-		builder.WriteString(strings.ReplaceAll(c.QuotedText, "\n", "\n> "))
-		builder.WriteString("\n\n")
-	}
-
-	if c.ID != "" {
-		builder.WriteString(fmt.Sprintf("(id: %s) ", c.ID))
-	}
-	author := c.Author
-	if author == "" {
-		author = "Unknown"
-	}
-	author = escapeMarkdown(author)
-	builder.WriteString(fmt.Sprintf("**%s**", author))
-	if ts := formatTime(c.CreatedTime); ts != "" {
-		builder.WriteString(fmt.Sprintf(" (%s)", ts))
-	}
-	if c.Resolved {
-		builder.WriteString(" ✓ resolved")
-	}
-	builder.WriteString(": ")
-	builder.WriteString(c.Content)
-	builder.WriteString("\n")
-
-	for _, r := range c.Replies {
-		rAuthor := r.Author
-		if rAuthor == "" {
-			rAuthor = "Unknown"
-		}
-		rAuthor = escapeMarkdown(rAuthor)
-		builder.WriteString(fmt.Sprintf("  ↳ **%s**", rAuthor))
-		if ts := formatTime(r.CreatedTime); ts != "" {
-			builder.WriteString(fmt.Sprintf(" (%s)", ts))
-		}
-		builder.WriteString(": ")
-		builder.WriteString(r.Content)
-		builder.WriteString("\n")
-	}
-
-	builder.WriteString("\n")
-}
-
-// formatTime converts an RFC 3339 timestamp to a short date string.
-func formatTime(rfc3339 string) string {
-	if rfc3339 == "" {
-		return ""
-	}
-	t, err := time.Parse(time.RFC3339, rfc3339)
-	if err != nil {
-		return ""
-	}
-	return t.Format("2006-01-02")
-}
-
-func escapeMarkdown(s string) string {
-	s = strings.ReplaceAll(s, "*", "\\*")
-	s = strings.ReplaceAll(s, "_", "\\_")
-	return s
 }
