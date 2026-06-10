@@ -59,14 +59,22 @@ func TestConvertComments(t *testing.T) {
 			if !strings.Contains(got, tt.wantSub) {
 				t.Errorf("ConvertComments() = %q, want to contain %q", got, tt.wantSub)
 			}
+			if tt.name == "single comment with details" {
+				if !strings.Contains(got, "status: draft") {
+					t.Errorf("ConvertComments() missing 'status: draft', got: %q", got)
+				}
+				if !strings.Contains(got, `new-reply: ""`) {
+					t.Errorf("ConvertComments() missing 'new-reply: \"\"', got: %q", got)
+				}
+			}
 
-			// Validate that the output inside <!-- gdoc-comment: and --> is indeed valid YAML
+			// Validate that the output inside <!-- gdoc-comment-content: and --> is indeed valid YAML
 			if got != "" {
 				lines := strings.Split(got, "\n")
 				var yamlLines []string
 				recording := false
 				for _, line := range lines {
-					if strings.HasPrefix(line, "<!-- gdoc-comment:") {
+					if strings.HasPrefix(line, "<!-- gdoc-comment-content:") {
 						recording = true
 						continue
 					}

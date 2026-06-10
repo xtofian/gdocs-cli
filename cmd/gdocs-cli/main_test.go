@@ -39,7 +39,11 @@ func TestCLIHelp(t *testing.T) {
 		"Google Docs URL",
 		"OAuth credentials JSON file",
 		"integration instructions",
-		"upload as replies",
+		"Upload comment replies",
+		"-file",
+		"comment blocks for uploading",
+		"-dry-run",
+		"Simulate comment uploading",
 	}
 
 	for _, expected := range expectedStrings {

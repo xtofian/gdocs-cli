@@ -10,11 +10,13 @@ import (
 
 // ConvertSingleComment renders a single comment enclosed in an HTML comment compatible with markdown.
 func ConvertSingleComment(c gdocs.Comment) string {
+	c.NewReply = ""
+	c.Status = "draft"
 	data, err := yaml.Marshal([]gdocs.Comment{c})
 	if err != nil {
-		return fmt.Sprintf("<!-- gdoc-comment: error encoding comment: %v -->", err)
+		return fmt.Sprintf("<!-- gdoc-comment-content: error encoding comment: %v -->", err)
 	}
-	return fmt.Sprintf("<!-- gdoc-comment:\n%s\n-->", string(data))
+	return fmt.Sprintf("<!-- gdoc-comment-content:\n%s\n-->", string(data))
 }
 
 // ConvertComments renders comments as a markdown section for unattached comments.

@@ -48,7 +48,9 @@ func main() {
 	cleanFlag := flag.Bool("clean", false, "Clean output (suppress all logs, only output markdown)")
 	var comments commentsMode
 	flag.Var(&comments, "comments", "Include comments: --comments (all) or --comments=open (unresolved only)")
-	uploadCommentsFlag := flag.String("upload-comments", "", "Path to JSON file containing comments to upload as replies to existing threads")
+	uploadCommentsFlag := flag.Bool("upload-comments", false, "Upload comment replies from the file specified by --file")
+	fileFlag := flag.String("file", "", "Path to local markdown/YAML file containing comment blocks for uploading")
+	dryRunFlag := flag.Bool("dry-run", false, "Simulate comment uploading and print reconciled updates without saving")
 	instructionFlag := flag.Bool("instruction", false, "Print integration instructions for AI coding agents")
 	flag.Parse()
 
@@ -61,6 +63,12 @@ func main() {
 	// Handle clean mode - suppress all logs
 	if *cleanFlag {
 		log.SetOutput(io.Discard)
+	}
+
+	// If uploading comments, --file is required
+	if *uploadCommentsFlag && *fileFlag == "" {
+		fmt.Fprintln(os.Stderr, "Error: --file flag is required when using --upload-comments")
+		os.Exit(1)
 	}
 
 	// Determine config path (use default if not specified), unless bypassed by --access_token
@@ -99,7 +107,7 @@ func main() {
 	}
 
 	// Run the main logic
-	if err := run(*urlFlag, configPath, *accessTokenFlag, *uploadCommentsFlag, comments); err != nil {
+	if err := run(*urlFlag, configPath, *accessTokenFlag, *fileFlag, *uploadCommentsFlag, *dryRunFlag, comments); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -108,7 +116,7 @@ func main() {
 // run executes the main logic of the CLI.
 // It handles authentication, document fetching, and markdown conversion.
 // If accessTokenPath is non-empty it is used directly (bypassing credPath and the OAuth flow).
-func run(docURL, credPath, accessTokenPath, uploadCommentsPath string, comments commentsMode) error {
+func run(docURL, credPath, accessTokenPath, filePath string, uploadComments, dryRun bool, comments commentsMode) error {
 	ctx := context.Background()
 
 	// Extract document ID from URL
@@ -139,12 +147,26 @@ func run(docURL, credPath, accessTokenPath, uploadCommentsPath string, comments 
 	}
 
 	// Upload comments if requested
-	if uploadCommentsPath != "" {
-		log.Printf("Processing comment updates from %s...", uploadCommentsPath)
-		if err := gdocs.UploadComments(ctx, httpClient, docID, uploadCommentsPath); err != nil {
+	if uploadComments {
+		log.Printf("Parsing comment updates from %s...", filePath)
+		updates, err := gdocs.ParseCommentsFromFile(filePath, docID)
+		if err != nil {
+			return fmt.Errorf("failed to parse comments: %w", err)
+		}
+
+		if dryRun {
+			log.Println("Simulating comment updates (dry-run)...")
+		} else {
+			log.Printf("Uploading %d comment update(s) to document %s...", len(updates), docID)
+		}
+		if err := gdocs.UploadComments(ctx, httpClient, docID, updates, dryRun); err != nil {
 			return fmt.Errorf("failed to upload comments: %w", err)
 		}
-		log.Println("Finished processing comment updates.")
+		if dryRun {
+			log.Println("Finished simulating comment updates.")
+		} else {
+			log.Println("Finished uploading comment updates.")
+		}
 		return nil
 	}
 

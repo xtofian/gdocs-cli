@@ -2,16 +2,17 @@ package gdocs
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"google.golang.org/api/drive/v3"
 	"google.golang.org/api/option"
+	"gopkg.in/yaml.v3"
 )
 
 // Comment represents a simplified Google Docs comment thread.
@@ -25,8 +26,8 @@ type Comment struct {
 	CreatedTime string  `json:"created-time,omitempty" yaml:"created-time,omitempty"`
 	Resolved    bool    `json:"resolved,omitempty" yaml:"resolved,omitempty"`
 	Replies     []Reply `json:"replies,omitempty" yaml:"replies,omitempty"`
-	NewReply    string  `json:"new-reply,omitempty" yaml:"new-reply,omitempty"`
-	Status      string  `json:"status,omitempty" yaml:"status,omitempty"`
+	NewReply    string  `json:"new-reply,omitempty" yaml:"new-reply"`
+	Status      string  `json:"status,omitempty" yaml:"status"`
 }
 
 // Reply represents a reply to a comment.
@@ -42,14 +43,94 @@ func (u *Comment) IsDraft() bool {
 	return u.Status == "draft" || u.NewReply == ""
 }
 
-// ParseCommentUpdates parses and validates comment updates from an io.Reader.
-func ParseCommentUpdates(r io.Reader) ([]Comment, error) {
-	var updates []Comment
-	dec := json.NewDecoder(r)
-	if err := dec.Decode(&updates); err != nil {
-		return nil, fmt.Errorf("failed to decode JSON: %w", err)
+// ParseCommentsFromFile reads a local file (Markdown or raw YAML), checks for matching frontmatter,
+// and parses any YAML comment blocks contained within.
+func ParseCommentsFromFile(filePath string, expectedDocID string) ([]Comment, error) {
+	contentBytes, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read comments file %s: %w", filePath, err)
 	}
 
+	contentStr := string(contentBytes)
+
+	// 1. Check for YAML frontmatter
+	if strings.HasPrefix(contentStr, "---") {
+		// Find second "---"
+		firstLineEnd := strings.Index(contentStr, "\n")
+		if firstLineEnd != -1 {
+			nextDash := strings.Index(contentStr[firstLineEnd+1:], "---")
+			if nextDash != -1 {
+				fmEnd := firstLineEnd + 1 + nextDash
+				fmBlock := contentStr[firstLineEnd+1 : fmEnd]
+
+				type fmStruct struct {
+					GdocID string `yaml:"gdoc_id"`
+				}
+				var fm fmStruct
+				if err := yaml.Unmarshal([]byte(fmBlock), &fm); err == nil {
+					if fm.GdocID != "" && expectedDocID != "" && fm.GdocID != expectedDocID {
+						return nil, fmt.Errorf("document ID mismatch: URL specifies '%s', but file frontmatter specifies '%s'", expectedDocID, fm.GdocID)
+					}
+				}
+				// Skip past the closing "---" and any trailing newline
+				postDash := fmEnd + 3
+				if postDash < len(contentStr) && contentStr[postDash] == '\r' {
+					postDash++
+				}
+				if postDash < len(contentStr) && contentStr[postDash] == '\n' {
+					postDash++
+				}
+				contentStr = contentStr[postDash:]
+			}
+		}
+	}
+
+	// 2. Extract YAML comment blocks
+	var updates []Comment
+	hasEmbeddedComments := false
+
+	startTag := "<!-- gdoc-comment-content:"
+	endTag := "-->"
+
+	searchPos := 0
+	for {
+		idx := strings.Index(contentStr[searchPos:], startTag)
+		if idx < 0 {
+			break
+		}
+		hasEmbeddedComments = true
+		blockStart := searchPos + idx + len(startTag)
+
+		endIdx := strings.Index(contentStr[blockStart:], endTag)
+		if endIdx < 0 {
+			return nil, fmt.Errorf("malformed comment block: missing closing '-->'")
+		}
+		blockEnd := blockStart + endIdx
+
+		yamlBlock := contentStr[blockStart:blockEnd]
+
+		var parsed []Comment
+		if err := yaml.Unmarshal([]byte(yamlBlock), &parsed); err != nil {
+			return nil, fmt.Errorf("failed to parse YAML inside comment block: %w\nBlock content:\n%s", err, yamlBlock)
+		}
+		updates = append(updates, parsed...)
+
+		searchPos = blockEnd + len(endTag)
+	}
+
+	// 3. Fallback to parsing entire file as raw YAML comments if no HTML comments are found
+	if !hasEmbeddedComments {
+		remaining := strings.TrimSpace(contentStr)
+		if remaining != "" {
+			var parsed []Comment
+			if err := yaml.Unmarshal([]byte(remaining), &parsed); err != nil {
+				return nil, fmt.Errorf("failed to parse file as raw YAML comments: %w", err)
+			}
+			updates = append(updates, parsed...)
+		}
+	}
+
+	// 4. Validate parsed comments
 	for i, u := range updates {
 		if !u.IsDraft() && u.ID == "" {
 			return nil, fmt.Errorf("validation error at index %d: comment thread ID ('id') is required for non-draft comments", i)
@@ -59,19 +140,9 @@ func ParseCommentUpdates(r io.Reader) ([]Comment, error) {
 	return updates, nil
 }
 
-// UploadComments reads a JSON file of comments and appends them as replies to existing threads.
-func UploadComments(ctx context.Context, httpClient *http.Client, docID string, jsonPath string) error {
-	f, err := os.Open(jsonPath)
-	if err != nil {
-		return fmt.Errorf("failed to open comments file %s: %w", jsonPath, err)
-	}
-	defer f.Close()
-
-	updates, err := ParseCommentUpdates(f)
-	if err != nil {
-		return fmt.Errorf("failed to parse comments: %w", err)
-	}
-
+// UploadComments takes parsed comments, reconciles them with existing threads on the server,
+// and uploads them. If dryRun is true, it only prints what would be sent.
+func UploadComments(ctx context.Context, httpClient *http.Client, docID string, updates []Comment, dryRun bool) error {
 	// Filter out drafts first to see if we have anything to upload
 	var activeUpdates []Comment
 	for _, u := range updates {
@@ -82,6 +153,7 @@ func UploadComments(ctx context.Context, httpClient *http.Client, docID string, 
 	}
 
 	if len(activeUpdates) == 0 {
+		log.Println("No active non-draft comments to upload.")
 		return nil
 	}
 
@@ -101,9 +173,12 @@ func UploadComments(ctx context.Context, httpClient *http.Client, docID string, 
 		commentTexts[c.ID] = texts
 	}
 
-	srv, err := drive.NewService(ctx, option.WithHTTPClient(httpClient))
-	if err != nil {
-		return fmt.Errorf("unable to create Drive service for uploading comments: %w", err)
+	var srv *drive.Service
+	if !dryRun {
+		srv, err = drive.NewService(ctx, option.WithHTTPClient(httpClient))
+		if err != nil {
+			return fmt.Errorf("unable to create Drive service for uploading comments: %w", err)
+		}
 	}
 
 	for _, u := range activeUpdates {
@@ -117,20 +192,28 @@ func UploadComments(ctx context.Context, httpClient *http.Client, docID string, 
 				}
 			}
 			if alreadyPresent {
-				log.Printf("Comment already exists in thread %s, skipping.", u.ID)
+				if dryRun {
+					fmt.Printf("[Dry-run] Comment already exists in thread %s, would skip: %q\n", u.ID, u.NewReply)
+				} else {
+					log.Printf("Comment already exists in thread %s, skipping.", u.ID)
+				}
 				continue
 			}
 		}
 
-		log.Printf("Uploading comment to thread %s...", u.ID)
-		replyBody := &drive.Reply{
-			Content: u.NewReply,
+		if dryRun {
+			fmt.Printf("[Dry-run] Would upload reply to thread %s: %q\n", u.ID, u.NewReply)
+		} else {
+			log.Printf("Uploading comment to thread %s...", u.ID)
+			replyBody := &drive.Reply{
+				Content: u.NewReply,
+			}
+			_, err := srv.Replies.Create(docID, u.ID, replyBody).Fields("id").Context(ctx).Do()
+			if err != nil {
+				return fmt.Errorf("failed to append comment to thread %s: %w", u.ID, err)
+			}
+			log.Printf("Successfully uploaded comment to thread %s", u.ID)
 		}
-		_, err := srv.Replies.Create(docID, u.ID, replyBody).Fields("id").Context(ctx).Do()
-		if err != nil {
-			return fmt.Errorf("failed to append comment to thread %s: %w", u.ID, err)
-		}
-		log.Printf("Successfully uploaded comment to thread %s", u.ID)
 	}
 
 	return nil
