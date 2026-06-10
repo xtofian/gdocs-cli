@@ -43,6 +43,22 @@ func (u *Comment) IsDraft() bool {
 	return u.Status == "draft" || u.NewReply == ""
 }
 
+// LastUpdateTime returns the timestamp of the last edit or reply on this comment thread.
+func (c *Comment) LastUpdateTime() time.Time {
+	last := time.Time{}
+	if t, err := time.Parse(time.RFC3339, c.CreatedTime); err == nil {
+		last = t
+	}
+	for _, r := range c.Replies {
+		if t, err := time.Parse(time.RFC3339, r.CreatedTime); err == nil {
+			if t.After(last) {
+				last = t
+			}
+		}
+	}
+	return last
+}
+
 // ParseCommentsFromFile reads a local file (Markdown or raw YAML), checks for matching frontmatter,
 // and parses any YAML comment blocks contained within.
 func ParseCommentsFromFile(filePath string, expectedDocID string) ([]Comment, error) {

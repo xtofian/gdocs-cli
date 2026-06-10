@@ -146,13 +146,35 @@ The tool will automatically use the cached token - no browser interaction needed
 
 ### Include Comments
 
-Use the `--comments` flag to include document comments in the markdown output:
+Use the `--comments` or `--comments=open` flag to include document comments in the markdown output:
 
 ```bash
+# Include all comments (anchored in-line, unanchored at the end)
 ./gdocs-cli --url="https://docs.google.com/document/d/YOUR_DOC_ID/edit" --comments
+
+# Include only unresolved (open) comments
+./gdocs-cli --url="..." --comments=open
+
+# Omit comments older than 30 days
+./gdocs-cli --url="..." --comments --comments-skip-older-than=30
 ```
 
-This appends a `## Comments` section at the end of the markdown with quoted text, author, date, and replies.
+The tool uses sequence alignment via the document's mobilebasic view to precisely place comment anchors inline. Any comments that cannot be anchored inline (including open comments in `--comments=open` mode) are neatly appended under a single flat section: `## Comments (unattached)`.
+
+Each comment block is embedded as a clean, human-readable **YAML** block inside HTML comment tags:
+```html
+<!-- gdoc-comment-content:
+- id: AAAB9AVHdik
+  author: Alice
+  comment: This is a comment
+  quoted-text: some text
+  new-reply: ""
+  status: draft
+-->
+```
+
+**Note on Draft Fields:**
+The tool automatically emits an empty `new-reply: ""` field and a `status: draft` field into each comment block inside the generated markdown. This allows you to easily type a reply inline, change `draft` to `ready`, and upload them back to Google Docs using the upload workflow!
 
 > **⚠️ Important:** The `--comments` flag requires the `https://www.googleapis.com/auth/drive.readonly` scope. If you previously authenticated without this scope, you need to delete your cached token and re-authenticate:
 >
@@ -190,41 +212,29 @@ This is useful when:
 
 ### Upload Comments (Replies) to Existing Threads
 
-Use the `--upload-comments` flag to append new comments as replies to existing comment threads in the Google Doc using a JSON file:
+Use the `--upload-comments` flag combined with `--file` to parse your local markdown or YAML file, find and reconcile any comments carrying replies, and append them back to the active Google Doc:
 
 ```bash
-./gdocs-cli --url="https://docs.google.com/document/d/YOUR_DOC_ID/edit" --upload-comments="comments.json"
+# Upload comment replies parsed from your local markdown file
+./gdocs-cli --url="https://docs.google.com/document/d/YOUR_DOC_ID/edit" --file="sample.md" --upload-comments
+
+# Simulate uploads (dry-run) without making live writes to the API
+./gdocs-cli --url="https://docs.google.com/document/d/YOUR_DOC_ID/edit" --file="sample.md" --upload-comments --dry-run
 ```
 
-The comments file must be a JSON array where each entry has:
-- `id`: The Google Drive comment/thread ID (required for active comments).
-- `new-comment`: The comment text to append as a reply.
-- `status` (optional): If set to `"draft"`, the comment is treated as a draft and is **not** uploaded.
+**How It Works:**
+1. **Doc ID Verification:** The tool automatically extracts the YAML frontmatter from the file. If the `gdoc_id` inside the frontmatter does not match the Google Doc ID specified in the `--url` flag, execution halts immediately with an error to prevent uploading replies to the wrong document.
+2. **Comment Extraction:** It extracts and parses all YAML-serialized comment blocks. It supports both embedded comment blocks (`<!-- gdoc-comment-content:\n...-->`) and standalone `.yaml` files containing flat lists of comments.
+3. **Idempotence & Safety:** The tool fetches the document's active comment threads from Google Drive, cross-references existing replies, and skips uploading if the reply has already been posted with the exact same content.
+4. **Draft Skipping:** Comment threads in the file with `status: draft` are ignored and skipped. To send a reply, simply write your comment in the `new-reply:` field and flip `status` to `ready`.
 
-**Example `comments.json`:**
-```json
-[
-  {
-    "id": "AAAxyzabc",
-    "comment-thread": [
-      {
-        "commenter": "Joe Reviewer",
-        "date": "2026-05-08",
-        "comment": "You should fix this"
-      }
-    ],
-    "new-comment": "I think you're both wrong.",
-    "status": "ready"
-  },
-  {
-    "id": "BBB123xyz",
-    "new-comment": "This is a draft comment and will not be uploaded.",
-    "status": "draft"
-  }
-]
+**Example Comments/YAML Block inside the File:**
+```yaml
+- id: AAAxyzabc
+  comment: "This is a comment thread on the doc"
+  new-reply: "This is my ready response to Joe."
+  status: ready
 ```
-
-*Note: The `comment-thread` list in the JSON is informational and is ignored by the tool during upload.*
 
 **Idempotence and Behavior:**
 - **Idempotency**: The upload action is fully idempotent. The tool will automatically fetch the existing comment thread first and skip uploading any replies that already exist with the exact same content.
@@ -266,6 +276,8 @@ The tool adds YAML frontmatter with document metadata:
 ```yaml
 ---
 title: Document Title
+gdoc_id: 166O6usLtU8iXbK8gDLmNrX_J1c-dfecq8AUdzje-t5I
+revision_id: AIzaSyB...
 author: (if available)
 created: (if available)
 modified: (if available)

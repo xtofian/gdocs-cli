@@ -164,10 +164,6 @@ func (c *Converter) Convert() (string, error) {
 	// Append remaining comments (ambiguous and deleted) if present.
 	if len(c.comments) > 0 {
 		_, ambiguous, deleted := c.splitComments()
-		if c.openCommentsOnly && c.mobileBasicSucceeded {
-			ambiguous = nil
-			deleted = nil
-		}
 		if len(ambiguous) > 0 || len(deleted) > 0 {
 			bodyStr := builder.String()
 			bodyStr = strings.TrimRight(bodyStr, " \t\r\n")

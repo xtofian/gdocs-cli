@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/famasya/gdocs-cli/internal/auth"
 	"github.com/famasya/gdocs-cli/internal/gdocs"
@@ -48,6 +49,7 @@ func main() {
 	cleanFlag := flag.Bool("clean", false, "Clean output (suppress all logs, only output markdown)")
 	var comments commentsMode
 	flag.Var(&comments, "comments", "Include comments: --comments (all) or --comments=open (unresolved only)")
+	commentsSkipOlderThanFlag := flag.Int("comments-skip-older-than", 0, "Omit comments where the last update is older than the specified number of days")
 	uploadCommentsFlag := flag.Bool("upload-comments", false, "Upload comment replies from the file specified by --file")
 	fileFlag := flag.String("file", "", "Path to local markdown/YAML file containing comment blocks for uploading")
 	dryRunFlag := flag.Bool("dry-run", false, "Simulate comment uploading and print reconciled updates without saving")
@@ -107,7 +109,7 @@ func main() {
 	}
 
 	// Run the main logic
-	if err := run(*urlFlag, configPath, *accessTokenFlag, *fileFlag, *uploadCommentsFlag, *dryRunFlag, comments); err != nil {
+	if err := run(*urlFlag, configPath, *accessTokenFlag, *fileFlag, *uploadCommentsFlag, *dryRunFlag, *commentsSkipOlderThanFlag, comments); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -116,7 +118,7 @@ func main() {
 // run executes the main logic of the CLI.
 // It handles authentication, document fetching, and markdown conversion.
 // If accessTokenPath is non-empty it is used directly (bypassing credPath and the OAuth flow).
-func run(docURL, credPath, accessTokenPath, filePath string, uploadComments, dryRun bool, comments commentsMode) error {
+func run(docURL, credPath, accessTokenPath, filePath string, uploadComments, dryRun bool, commentsSkipOlderThan int, comments commentsMode) error {
 	ctx := context.Background()
 
 	// Extract document ID from URL
@@ -220,6 +222,17 @@ func run(docURL, credPath, accessTokenPath, filePath string, uploadComments, dry
 					filtered = append(filtered, c)
 				}
 			}
+		}
+
+		if commentsSkipOlderThan > 0 {
+			cutoff := time.Now().AddDate(0, 0, -commentsSkipOlderThan)
+			ageFiltered := filtered[:0]
+			for _, c := range filtered {
+				if c.LastUpdateTime().After(cutoff) {
+					ageFiltered = append(ageFiltered, c)
+				}
+			}
+			filtered = ageFiltered
 		}
 
 		log.Printf("Found %d comment(s) (%d total)", len(filtered), len(allComments))

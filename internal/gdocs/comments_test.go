@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestIsDraft(t *testing.T) {
@@ -160,5 +161,28 @@ func TestFormatDate(t *testing.T) {
 				t.Errorf("formatDate() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLastUpdateTime(t *testing.T) {
+	c := Comment{
+		ID:          "thread-1",
+		CreatedTime: "2026-06-08T12:00:00Z",
+		Replies: []Reply{
+			{
+				CreatedTime: "2026-06-09T15:00:00Z",
+			},
+			{
+				CreatedTime: "2026-06-08T18:00:00Z",
+			},
+		},
+	}
+
+	got := c.LastUpdateTime()
+	wantStr := "2026-06-09T15:00:00Z"
+	want, _ := time.Parse(time.RFC3339, wantStr)
+
+	if !got.Equal(want) {
+		t.Errorf("LastUpdateTime() = %s, want %s", got.Format(time.RFC3339), want.Format(time.RFC3339))
 	}
 }

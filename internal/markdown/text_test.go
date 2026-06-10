@@ -450,7 +450,7 @@ func TestOpenCommentsMobileBasicOmission(t *testing.T) {
 	}
 
 	// Case 1: openCommentsOnly = true, mobileBasicSucceeded = true
-	// The unplaced comment should NOT populate ## Comments section
+	// In the new behavior, the unplaced open comment SHOULD populate ## Comments (unattached) section
 	c1 := NewConverter(doc)
 	c1.SetOpenCommentsOnly(true)
 	c1.SetComments(comments, "<html><body>Unrelated</body></html>")
@@ -458,12 +458,12 @@ func TestOpenCommentsMobileBasicOmission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Convert() error: %v", err)
 	}
-	if strings.Contains(out1, "## Comments") {
-		t.Errorf("expected ## Comments section to be omitted under openCommentsOnly and mobileBasicSucceeded, but found: %q", out1)
+	if !strings.Contains(out1, "## Comments (unattached)") {
+		t.Errorf("expected ## Comments (unattached) section to be included under openCommentsOnly and mobileBasicSucceeded, but was missing: %q", out1)
 	}
 
 	// Case 2: openCommentsOnly = false, mobileBasicSucceeded = true
-	// The unplaced comment SHOULD populate ## Comments section
+	// The unplaced comment SHOULD populate ## Comments (unattached) section
 	c2 := NewConverter(doc)
 	c2.SetOpenCommentsOnly(false)
 	c2.SetComments(comments, "<html><body>Unrelated</body></html>")
@@ -471,8 +471,8 @@ func TestOpenCommentsMobileBasicOmission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Convert() error: %v", err)
 	}
-	if !strings.Contains(out2, "## Comments") {
-		t.Errorf("expected ## Comments section to be populated when openCommentsOnly = false, but was missing")
+	if !strings.Contains(out2, "## Comments (unattached)") {
+		t.Errorf("expected ## Comments (unattached) section to be populated when openCommentsOnly = false, but was missing")
 	}
 }
 
