@@ -215,6 +215,14 @@ func run(docURL, credPath, accessTokenPath, uploadCommentsPath string, comments 
 		}
 
 		converter.SetComments(filtered, mobileBasicHTML)
+
+		// Check for concurrent modification race
+		if doc.RevisionId != "" {
+			doc2, err := client.FetchDocument(docID)
+			if err == nil && doc2.RevisionId != "" && doc2.RevisionId != doc.RevisionId {
+				return fmt.Errorf("document was concurrently modified during processing (revision changed from %s to %s); please retry", doc.RevisionId, doc2.RevisionId)
+			}
+		}
 	}
 
 	markdownOutput, err := converter.Convert()

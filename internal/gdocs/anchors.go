@@ -321,17 +321,20 @@ func BuildAnchorResultWithMobileBasic(body *docs.Body, comments []Comment, mobil
 	mobileParas := strings.Split(cleanText, "\n")
 	anchoredMap := make(map[string]int) // comment.ID -> absolute offset
 
-	for _, mp := range mobileParas {
+	// Perform sequence alignment of API paragraphs and mobile paragraphs
+	mobileToAPIMap := alignParagraphs(apiParas, mobileParas)
+
+	for j, mp := range mobileParas {
 		pids := findPlaceholders(mp)
 		if len(pids) == 0 {
 			continue
 		}
 
-		bestIdx := findBestMatchingParagraph(mp, apiParas)
-		if bestIdx < 0 {
+		apiIdx, matched := mobileToAPIMap[j]
+		if !matched {
 			continue
 		}
-		ap := apiParas[bestIdx]
+		ap := apiParas[apiIdx]
 
 		s1, placeholderIndices := parseParagraphPlaceholders(mp)
 		s2 := ap.paraText
@@ -374,30 +377,10 @@ func BuildAnchorResultWithMobileBasic(body *docs.Body, comments []Comment, mobil
 		isAnchored[id] = true
 	}
 
-	// Fallback to standard string search for any comments not anchored via mobilebasic
-	var fallbackComments []Comment
+	// All comments that were not anchored via mobilebasic are classified as AmbiguousIDs
 	for _, c := range comments {
 		if !isAnchored[c.ID] {
-			fallbackComments = append(fallbackComments, c)
-		}
-	}
-
-	if len(fallbackComments) > 0 {
-		fallbackRes := BuildAnchorResult(body, fallbackComments)
-		for offset, id := range fallbackRes.Offsets {
-			res.Offsets[offset] = id
-			anchored = append(anchored, anchoredEntry{offset, id})
-			isAnchored[id] = true
-		}
-		for _, id := range fallbackRes.AmbiguousIDs {
-			if !isAnchored[id] {
-				res.AmbiguousIDs = append(res.AmbiguousIDs, id)
-			}
-		}
-		for _, id := range fallbackRes.DeletedIDs {
-			if !isAnchored[id] {
-				res.DeletedIDs = append(res.DeletedIDs, id)
-			}
+			res.AmbiguousIDs = append(res.AmbiguousIDs, c.ID)
 		}
 	}
 
@@ -614,5 +597,106 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func jaccardSimilarity(s1, s2 string) float64 {
+	norm1 := normalizeForMatching(s1)
+	norm2 := normalizeForMatching(s2)
+	if norm1 == "" || norm2 == "" {
+		return 0.0
+	}
+
+	w1 := strings.Fields(norm1)
+	w2 := strings.Fields(norm2)
+
+	set1 := make(map[string]bool)
+	for _, w := range w1 {
+		set1[w] = true
+	}
+	set2 := make(map[string]bool)
+	for _, w := range w2 {
+		set2[w] = true
+	}
+
+	intersectSize := 0
+	for w := range set1 {
+		if set2[w] {
+			intersectSize++
+		}
+	}
+
+	unionSize := len(set1) + len(set2) - intersectSize
+	if unionSize == 0 {
+		return 0.0
+	}
+
+	return float64(intersectSize) / float64(unionSize)
+}
+
+func alignParagraphs(apiParas []paraInfo, mobileParas []string) map[int]int {
+	n := len(apiParas)
+	m := len(mobileParas)
+
+	// dp[i][j] stores the max score for apiParas[0..i-1] and mobileParas[0..j-1]
+	dp := make([][]float64, n+1)
+	for i := range dp {
+		dp[i] = make([]float64, m+1)
+	}
+
+	// backtrack table
+	// Choices:
+	// 0: skip API (i-1)
+	// 1: skip Mobile (j-1)
+	// 2: match API (i-1) and Mobile (j-1)
+	choices := make([][]int, n+1)
+	for i := range choices {
+		choices[i] = make([]int, m+1)
+	}
+
+	for i := 1; i <= n; i++ {
+		for j := 1; j <= m; j++ {
+			// Option 1: skip API paragraph
+			score := dp[i-1][j]
+			choice := 0
+
+			// Option 2: skip Mobile paragraph
+			if dp[i][j-1] > score {
+				score = dp[i][j-1]
+				choice = 1
+			}
+
+			// Option 3: match API and Mobile paragraph
+			cleanMobile := removePlaceholders(mobileParas[j-1])
+			sim := jaccardSimilarity(apiParas[i-1].paraText, cleanMobile)
+			if sim >= 0.5 {
+				matchScore := dp[i-1][j-1] + sim
+				if matchScore > score {
+					score = matchScore
+					choice = 2
+				}
+			}
+
+			dp[i][j] = score
+			choices[i][j] = choice
+		}
+	}
+
+	// Backtrack to find the matching
+	alignment := make(map[int]int) // mobileParaIndex -> apiParaIndex
+	i, j := n, m
+	for i > 0 && j > 0 {
+		choice := choices[i][j]
+		if choice == 2 {
+			alignment[j-1] = i-1
+			i--
+			j--
+		} else if choice == 0 {
+			i--
+		} else {
+			j--
+		}
+	}
+
+	return alignment
 }
 

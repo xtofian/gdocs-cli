@@ -150,3 +150,58 @@ func TestBuildAnchorResultWithMobileBasic(t *testing.T) {
 		t.Errorf("expected anchored ID list to contain comment-abc, got %v", res.AnchoredIDs)
 	}
 }
+
+func TestBuildAnchorResultWithMobileBasic_MultiTabOmission(t *testing.T) {
+	// Setup mock Docs API document body for the current tab (contains paragraph A)
+	body := &docs.Body{
+		Content: []*docs.StructuralElement{
+			{
+				StartIndex: 1,
+				Paragraph: &docs.Paragraph{
+					Elements: []*docs.ParagraphElement{
+						{
+							StartIndex: 1,
+							TextRun: &docs.TextRun{
+								Content: "Paragraph in current tab.",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Comment on tab 2's identical paragraph
+	comments := []Comment{
+		{
+			ID:          "comment-tab2",
+			Content:     "This comment is on the second tab.",
+			QuotedText:  "current tab",
+			CreatedTime: "2026-06-08T12:00:00Z",
+		},
+	}
+
+	// Setup mobilebasic HTML containing text of Tab 1 AND Tab 2.
+	// Tab 1: "Paragraph in current tab." (without any comment)
+	// Tab 2: "Some other text on tab 2."
+	//        "Paragraph in current tab." with comment-tab2 [a]
+	mobileHTML := `<!DOCTYPE html>
+<html>
+<body>
+<p>Paragraph in current tab.</p>
+<p>Some other text on tab 2.</p>
+<p>Paragraph in current tab <a href="#cmnt1" id="cmnt_ref1">[a]</a>.</p>
+<div style="border:1px solid black;margin:5px">
+<a href="#cmnt_ref1" id="cmnt1">[a]</a><span>This comment is on the second tab.</span>
+</div>
+</body>
+</html>`
+
+	res := BuildAnchorResultWithMobileBasic(body, comments, mobileHTML)
+
+	// Since Tab 1 does not have the comment, and sequence alignment maps the current tab's paragraph
+	// to the first paragraph in mobilebasic (which has no comment), the comment should NOT be matched to our paragraph.
+	if len(res.Offsets) > 0 {
+		t.Errorf("expected no comments to be anchored in the current tab, but got anchored offsets: %v", res.Offsets)
+	}
+}

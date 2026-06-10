@@ -12,6 +12,8 @@ import (
 // Frontmatter represents the YAML frontmatter for a markdown document.
 type Frontmatter struct {
 	Title        string    `yaml:"title"`
+	DocID        string    `yaml:"gdoc_id,omitempty"`
+	RevisionID   string    `yaml:"revision_id,omitempty"`
 	Author       string    `yaml:"author,omitempty"`
 	CreatedDate  time.Time `yaml:"created,omitempty"`
 	ModifiedDate time.Time `yaml:"modified,omitempty"`
@@ -20,7 +22,9 @@ type Frontmatter struct {
 // GenerateFrontmatter creates YAML frontmatter from a Google Docs document.
 func GenerateFrontmatter(doc *docs.Document) (string, error) {
 	fm := Frontmatter{
-		Title: doc.Title,
+		Title:      doc.Title,
+		DocID:      doc.DocumentId,
+		RevisionID: doc.RevisionId,
 	}
 
 	// Note: Google Docs API v1 doesn't provide author, created, or modified dates
