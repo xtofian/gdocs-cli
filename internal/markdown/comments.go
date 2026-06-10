@@ -1,16 +1,16 @@
 package markdown
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/famasya/gdocs-cli/internal/gdocs"
+	"gopkg.in/yaml.v3"
 )
 
 // ConvertSingleComment renders a single comment enclosed in an HTML comment compatible with markdown.
 func ConvertSingleComment(c gdocs.Comment) string {
-	data, err := json.MarshalIndent([]gdocs.Comment{c}, "", "  ")
+	data, err := yaml.Marshal([]gdocs.Comment{c})
 	if err != nil {
 		return fmt.Sprintf("<!-- gdoc-comment: error encoding comment: %v -->", err)
 	}

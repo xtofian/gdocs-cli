@@ -1,11 +1,11 @@
 package markdown
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/famasya/gdocs-cli/internal/gdocs"
+	"gopkg.in/yaml.v3"
 )
 
 func TestConvertComments(t *testing.T) {
@@ -43,7 +43,7 @@ func TestConvertComments(t *testing.T) {
 					},
 				},
 			},
-			wantSub: `"id": "AAAB9AVHdik"`,
+			wantSub: `id: AAAB9AVHdik`,
 		},
 	}
 
@@ -60,10 +60,10 @@ func TestConvertComments(t *testing.T) {
 				t.Errorf("ConvertComments() = %q, want to contain %q", got, tt.wantSub)
 			}
 
-			// Validate that the output inside <!-- gdoc-comment: and --> is indeed valid pretty-printed JSON
+			// Validate that the output inside <!-- gdoc-comment: and --> is indeed valid YAML
 			if got != "" {
 				lines := strings.Split(got, "\n")
-				var jsonLines []string
+				var yamlLines []string
 				recording := false
 				for _, line := range lines {
 					if strings.HasPrefix(line, "<!-- gdoc-comment:") {
@@ -75,14 +75,14 @@ func TestConvertComments(t *testing.T) {
 						continue
 					}
 					if recording {
-						jsonLines = append(jsonLines, line)
+						yamlLines = append(yamlLines, line)
 					}
 				}
 
-				jsonStr := strings.Join(jsonLines, "\n")
+				yamlStr := strings.Join(yamlLines, "\n")
 				var parsed []gdocs.Comment
-				if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
-					t.Errorf("Failed to unmarshal emitted JSON inside comment block: %v\nJSON string:\n%s", err, jsonStr)
+				if err := yaml.Unmarshal([]byte(yamlStr), &parsed); err != nil {
+					t.Errorf("Failed to unmarshal emitted YAML inside comment block: %v\nYAML string:\n%s", err, yamlStr)
 				} else {
 					if len(parsed) != 1 || parsed[0].ID != tt.comments[0].ID {
 						t.Errorf("Parsed comment ID mismatch: %v", parsed)

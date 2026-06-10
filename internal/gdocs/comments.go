@@ -16,25 +16,25 @@ import (
 
 // Comment represents a simplified Google Docs comment thread.
 type Comment struct {
-	ID          string  `json:"id"`
-	Anchor      string  `json:"anchor,omitempty"`
-	Author      string  `json:"author,omitempty"`
-	AuthorEmail string  `json:"author-email,omitempty"`
-	Content     string  `json:"comment"`
-	QuotedText  string  `json:"quoted-text,omitempty"`
-	CreatedTime string  `json:"created-time,omitempty"`
-	Resolved    bool    `json:"resolved,omitempty"`
-	Replies     []Reply `json:"replies,omitempty"`
-	NewReply    string  `json:"new-reply,omitempty"`
-	Status      string  `json:"status,omitempty"`
+	ID          string  `json:"id" yaml:"id"`
+	Anchor      string  `json:"anchor,omitempty" yaml:"anchor,omitempty"`
+	Author      string  `json:"author,omitempty" yaml:"author,omitempty"`
+	AuthorEmail string  `json:"author-email,omitempty" yaml:"author-email,omitempty"`
+	Content     string  `json:"comment" yaml:"comment"`
+	QuotedText  string  `json:"quoted-text,omitempty" yaml:"quoted-text,omitempty"`
+	CreatedTime string  `json:"created-time,omitempty" yaml:"created-time,omitempty"`
+	Resolved    bool    `json:"resolved,omitempty" yaml:"resolved,omitempty"`
+	Replies     []Reply `json:"replies,omitempty" yaml:"replies,omitempty"`
+	NewReply    string  `json:"new-reply,omitempty" yaml:"new-reply,omitempty"`
+	Status      string  `json:"status,omitempty" yaml:"status,omitempty"`
 }
 
 // Reply represents a reply to a comment.
 type Reply struct {
-	Author      string `json:"commenter"`
-	AuthorEmail string `json:"commenter-email,omitempty"`
-	Content     string `json:"reply"`
-	CreatedTime string `json:"date,omitempty"`
+	Author      string `json:"commenter" yaml:"commenter"`
+	AuthorEmail string `json:"commenter-email,omitempty" yaml:"commenter-email,omitempty"`
+	Content     string `json:"reply" yaml:"reply"`
+	CreatedTime string `json:"date,omitempty" yaml:"date,omitempty"`
 }
 
 // IsDraft returns true if the update is marked as a draft or has no content.
