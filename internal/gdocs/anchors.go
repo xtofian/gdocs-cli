@@ -382,12 +382,7 @@ func BuildAnchorResultWithMobileBasic(body *docs.Body, comments []Comment, mobil
 
 	isAnchored := make(map[string]bool)
 	for id, offset := range anchoredMap {
-		mIdx := commentToMobileIndex[id]
-		fullID := id
-		if mIdx != "" {
-			fullID = id + ",#cmnt" + mIdx
-		}
-		res.Offsets[offset] = fullID
+		res.Offsets[offset] = id
 		anchored = append(anchored, anchoredEntry{offset, id})
 		isAnchored[id] = true
 	}

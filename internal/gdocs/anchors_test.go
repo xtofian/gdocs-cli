@@ -140,7 +140,7 @@ func TestBuildAnchorResultWithMobileBasic(t *testing.T) {
 	// Index of "comment" is 27. Length of "comment" is 7. StartIndex is 1.
 	// So offset should be 1 + 27 + 7 = 35.
 	expectedOffset := 35
-	expectedID := "comment-abc,#cmnt1"
+	expectedID := "comment-abc"
 
 	if res.Offsets[expectedOffset] != expectedID {
 		t.Errorf("expected comment comment-abc to be anchored at offset %d with ID %q, got %q at offset %d", expectedOffset, expectedID, res.Offsets[expectedOffset], expectedOffset)
