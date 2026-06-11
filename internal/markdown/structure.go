@@ -6,6 +6,15 @@ import (
 	"google.golang.org/api/docs/v1"
 )
 
+func formatHeadingWithAnchor(text string, level int, headingId string) string {
+	suffix := ""
+	if headingId != "" {
+		suffix = " {#" + headingId + "}"
+	}
+	prefix := strings.Repeat("#", level)
+	return prefix + " " + text + suffix + "\n\n"
+}
+
 // convertParagraphWithFootnotes is the full-featured paragraph converter with
 // anchor and footnote reference support.
 func convertParagraphWithFootnotes(paragraph *docs.Paragraph, style *docs.ParagraphStyle, anchors map[int]string, registerFootnote func(id string), registerComment func(id string)) string {
@@ -21,23 +30,24 @@ func convertParagraphWithFootnotes(paragraph *docs.Paragraph, style *docs.Paragr
 	}
 
 	if style != nil && style.NamedStyleType != "" {
+		headingID := style.HeadingId
 		switch style.NamedStyleType {
 		case "TITLE":
-			return "# " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 1, headingID)
 		case "SUBTITLE":
-			return "## " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 2, headingID)
 		case "HEADING_1":
-			return "# " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 1, headingID)
 		case "HEADING_2":
-			return "## " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 2, headingID)
 		case "HEADING_3":
-			return "### " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 3, headingID)
 		case "HEADING_4":
-			return "#### " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 4, headingID)
 		case "HEADING_5":
-			return "##### " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 5, headingID)
 		case "HEADING_6":
-			return "###### " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 6, headingID)
 		}
 	}
 
@@ -63,23 +73,24 @@ func convertParagraphInternal(paragraph *docs.Paragraph, style *docs.ParagraphSt
 	}
 
 	if style != nil && style.NamedStyleType != "" {
+		headingID := style.HeadingId
 		switch style.NamedStyleType {
 		case "TITLE":
-			return "# " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 1, headingID)
 		case "SUBTITLE":
-			return "## " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 2, headingID)
 		case "HEADING_1":
-			return "# " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 1, headingID)
 		case "HEADING_2":
-			return "## " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 2, headingID)
 		case "HEADING_3":
-			return "### " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 3, headingID)
 		case "HEADING_4":
-			return "#### " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 4, headingID)
 		case "HEADING_5":
-			return "##### " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 5, headingID)
 		case "HEADING_6":
-			return "###### " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 6, headingID)
 		}
 	}
 
@@ -98,7 +109,6 @@ func ConvertParagraph(paragraph *docs.Paragraph, style *docs.ParagraphStyle) str
 
 	// Get the text content
 	text := ConvertParagraphElements(paragraph.Elements)
-
 	// Remove trailing newlines for cleaner output
 	text = strings.TrimRight(text, "\n")
 
@@ -109,23 +119,24 @@ func ConvertParagraph(paragraph *docs.Paragraph, style *docs.ParagraphStyle) str
 
 	// Handle headings
 	if style != nil && style.NamedStyleType != "" {
+		headingID := style.HeadingId
 		switch style.NamedStyleType {
 		case "TITLE":
-			return "# " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 1, headingID)
 		case "SUBTITLE":
-			return "## " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 2, headingID)
 		case "HEADING_1":
-			return "# " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 1, headingID)
 		case "HEADING_2":
-			return "## " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 2, headingID)
 		case "HEADING_3":
-			return "### " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 3, headingID)
 		case "HEADING_4":
-			return "#### " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 4, headingID)
 		case "HEADING_5":
-			return "##### " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 5, headingID)
 		case "HEADING_6":
-			return "###### " + text + "\n\n"
+			return formatHeadingWithAnchor(text, 6, headingID)
 		}
 	}
 

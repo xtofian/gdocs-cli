@@ -234,18 +234,32 @@ func (c *Converter) convertBody() string {
 	currSection := newSection()
 	sections = append(sections, currSection)
 
+	var activeCodeLines []string
+	var pendingEmptyParas []*docs.Paragraph
+
+	flushActiveCodeBlock := func(sec *section) {
+		if len(activeCodeLines) > 0 {
+			var sb strings.Builder
+			for _, line := range activeCodeLines {
+				sb.WriteString(line)
+			}
+			content := sb.String()
+			content = strings.TrimRight(content, " \t\r\n")
+			if content != "" {
+				sec.content.WriteString("```\n" + content + "\n```\n\n")
+			}
+			activeCodeLines = nil
+		}
+		for range pendingEmptyParas {
+			sec.content.WriteString("\n")
+		}
+		pendingEmptyParas = nil
+	}
+
 	for _, element := range c.body.Content {
 		if element.Paragraph != nil {
-			// Check if this paragraph is a heading.
-			// If it's a heading and the current section has content, start a new section.
-			if isHeading(element.Paragraph) {
-				if currSection.content.Len() > 0 {
-					currSection = newSection()
-					sections = append(sections, currSection)
-				}
-			}
+			p := element.Paragraph
 
-			// Capture the current section in callbacks
 			sec := currSection
 			registerFootnote := func(id string) {
 				if !sec.footnoteSeen[id] {
@@ -266,13 +280,72 @@ func (c *Converter) convertBody() string {
 				}
 			}
 
-			markdown := convertParagraphWithFootnotes(element.Paragraph, element.Paragraph.ParagraphStyle, c.anchorOffsets, registerFootnote, registerComment)
+			if isHeading(p) {
+				flushActiveCodeBlock(currSection)
+				if currSection.content.Len() > 0 {
+					currSection = newSection()
+					sections = append(sections, currSection)
+				}
+				markdown := convertParagraphWithFootnotes(p, p.ParagraphStyle, c.anchorOffsets, registerFootnote, registerComment)
+				currSection.content.WriteString(markdown)
+				continue
+			}
+
+			if p.Bullet != nil {
+				flushActiveCodeBlock(currSection)
+				markdown := convertParagraphWithFootnotes(p, p.ParagraphStyle, c.anchorOffsets, registerFootnote, registerComment)
+				currSection.content.WriteString(markdown)
+				continue
+			}
+
+			if startsWithE907(p) || isParagraphEntirelyMonospace(p) {
+				registerParagraphCommentsAndFootnotes(p, registerFootnote, registerComment, c.anchorOffsets)
+				for _, ep := range pendingEmptyParas {
+					activeCodeLines = append(activeCodeLines, extractParagraphRawText(ep))
+				}
+				pendingEmptyParas = nil
+				activeCodeLines = append(activeCodeLines, extractParagraphRawText(p))
+				continue
+			}
+
+			if isEmptyParagraph(p) {
+				if len(activeCodeLines) > 0 {
+					pendingEmptyParas = append(pendingEmptyParas, p)
+				} else {
+					flushActiveCodeBlock(currSection)
+					markdown := convertParagraphWithFootnotes(p, p.ParagraphStyle, c.anchorOffsets, registerFootnote, registerComment)
+					currSection.content.WriteString(markdown)
+				}
+				continue
+			}
+
+			flushActiveCodeBlock(currSection)
+			markdown := convertParagraphWithFootnotes(p, p.ParagraphStyle, c.anchorOffsets, registerFootnote, registerComment)
 			currSection.content.WriteString(markdown)
 		} else if element.Table != nil {
-			markdown := ConvertTable(element.Table)
-			currSection.content.WriteString(markdown)
+			flushActiveCodeBlock(currSection)
+			table := element.Table
+			if len(table.TableRows) == 1 && len(table.TableRows[0].TableCells) == 1 {
+				cell := table.TableRows[0].TableCells[0]
+				var cellRawSb strings.Builder
+				for _, se := range cell.Content {
+					if se.Paragraph != nil {
+						cellRawSb.WriteString(extractParagraphRawText(se.Paragraph))
+					}
+				}
+				rawContent := cellRawSb.String()
+				rawContent = strings.TrimRight(rawContent, " \t\r\n")
+				if rawContent != "" {
+					currSection.content.WriteString("```\n" + rawContent + "\n```\n\n")
+				}
+			} else {
+				markdown := ConvertTable(table)
+				currSection.content.WriteString(markdown)
+			}
 		}
 	}
+
+	flushActiveCodeBlock(currSection)
 
 	// Now process and merge all sections.
 	for _, sec := range sections {
@@ -334,4 +407,86 @@ func (c *Converter) convertBody() string {
 	}
 
 	return builder.String()
+}
+
+func startsWithE907(p *docs.Paragraph) bool {
+	if p == nil || len(p.Elements) == 0 {
+		return false
+	}
+	first := p.Elements[0]
+	return first.TextRun != nil && strings.HasPrefix(first.TextRun.Content, "\ue907")
+}
+
+func isParagraphEntirelyMonospace(p *docs.Paragraph) bool {
+	if p == nil || len(p.Elements) == 0 {
+		return false
+	}
+	hasText := false
+	for _, element := range p.Elements {
+		if element.TextRun != nil {
+			content := element.TextRun.Content
+			trimmed := strings.TrimSpace(content)
+			if trimmed == "" {
+				continue
+			}
+			hasText = true
+			style := element.TextRun.TextStyle
+			if style == nil || style.WeightedFontFamily == nil || !isMonospaceFont(style.WeightedFontFamily.FontFamily) {
+				return false
+			}
+		}
+	}
+	return hasText
+}
+
+func isEmptyParagraph(p *docs.Paragraph) bool {
+	if p == nil {
+		return true
+	}
+	var sb strings.Builder
+	for _, el := range p.Elements {
+		if el.TextRun != nil {
+			sb.WriteString(el.TextRun.Content)
+		}
+	}
+	return strings.TrimSpace(sb.String()) == ""
+}
+
+func extractParagraphRawText(paragraph *docs.Paragraph) string {
+	if paragraph == nil {
+		return ""
+	}
+	var sb strings.Builder
+	for i, element := range paragraph.Elements {
+		if element.TextRun != nil {
+			content := element.TextRun.Content
+			if i == 0 && strings.HasPrefix(content, "\ue907") {
+				content = content[len("\ue907"):]
+			}
+			content = strings.ReplaceAll(content, "\u000b", "\n")
+			sb.WriteString(content)
+		}
+	}
+	return sb.String()
+}
+
+func registerParagraphCommentsAndFootnotes(paragraph *docs.Paragraph, registerFootnote func(id string), registerComment func(id string), anchors map[int]string) {
+	if paragraph == nil {
+		return
+	}
+	for _, element := range paragraph.Elements {
+		if element.FootnoteReference != nil && registerFootnote != nil {
+			registerFootnote(element.FootnoteReference.FootnoteId)
+		}
+		if element.TextRun != nil && registerComment != nil && len(anchors) > 0 {
+			start := int(element.StartIndex)
+			content := element.TextRun.Content
+			cLen := utf16Len(content)
+			for offset, id := range anchors {
+				if offset >= start && offset < start+cLen {
+					registerComment(id)
+				}
+			}
+		}
+	}
 }

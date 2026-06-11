@@ -69,6 +69,30 @@ func TestApplyTextStyle(t *testing.T) {
 			style: &docs.TextStyle{Link: &docs.Link{Url: "https://example.com"}},
 			want:  "[click here](https://example.com)",
 		},
+		{
+			name:  "monospace text (Roboto Mono)",
+			text:  "my_code",
+			style: &docs.TextStyle{WeightedFontFamily: &docs.WeightedFontFamily{FontFamily: "Roboto Mono"}},
+			want:  "`my_code`",
+		},
+		{
+			name:  "monospace bold text (Courier New)",
+			text:  "important_code",
+			style: &docs.TextStyle{Bold: true, WeightedFontFamily: &docs.WeightedFontFamily{FontFamily: "Courier New"}},
+			want:  "**`important_code`**",
+		},
+		{
+			name:  "monospace text with spaces (PT Mono)",
+			text:  " trimmed_code ",
+			style: &docs.TextStyle{WeightedFontFamily: &docs.WeightedFontFamily{FontFamily: "PT Mono"}},
+			want:  " `trimmed_code` ",
+		},
+		{
+			name:  "monospace text with newline (Consolas)",
+			text:  "\nnewline_code\n",
+			style: &docs.TextStyle{WeightedFontFamily: &docs.WeightedFontFamily{FontFamily: "Consolas"}},
+			want:  "\n`newline_code`\n",
+		},
 	}
 
 	for _, tt := range tests {

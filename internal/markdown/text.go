@@ -55,10 +55,58 @@ func ConvertTextRun(textRun *docs.TextRun) string {
 	return ApplyTextStyle(text, style)
 }
 
+func isMonospaceFont(fontFamily string) bool {
+	switch strings.ToLower(fontFamily) {
+	case "consolas", "courier new", "inconsolata", "roboto mono", "source code pro", "pt mono":
+		return true
+	}
+	return false
+}
+
+func wrapInBackticks(text string) string {
+	if text == "" {
+		return ""
+	}
+	var leading, trailing strings.Builder
+	runes := []rune(text)
+	start := 0
+	for start < len(runes) {
+		r := runes[start]
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			leading.WriteRune(r)
+			start++
+		} else {
+			break
+		}
+	}
+	end := len(runes)
+	for end > start {
+		r := runes[end-1]
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			end--
+		} else {
+			break
+		}
+	}
+	for i := end; i < len(runes); i++ {
+		trailing.WriteRune(runes[i])
+	}
+	content := string(runes[start:end])
+	if content == "" {
+		return text
+	}
+	return leading.String() + "`" + content + "`" + trailing.String()
+}
+
 // ApplyTextStyle applies markdown formatting to text based on TextStyle.
 func ApplyTextStyle(text string, style *docs.TextStyle) string {
 	if style == nil {
 		return text
+	}
+
+	// Apply monospace/code style first
+	if style.WeightedFontFamily != nil && isMonospaceFont(style.WeightedFontFamily.FontFamily) {
+		text = wrapInBackticks(text)
 	}
 
 	// Handle links

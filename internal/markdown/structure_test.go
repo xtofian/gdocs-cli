@@ -151,6 +151,36 @@ func TestConvertParagraph(t *testing.T) {
 			style: &docs.ParagraphStyle{},
 			want:  "    - Double nested\n",
 		},
+		{
+			name: "heading 1 with ID",
+			para: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{
+						TextRun: &docs.TextRun{Content: "My Heading\n"},
+					},
+				},
+			},
+			style: &docs.ParagraphStyle{
+				NamedStyleType: "HEADING_1",
+				HeadingId:      "h.test-id-123",
+			},
+			want:  "# My Heading {#h.test-id-123}\n\n",
+		},
+		{
+			name: "title with ID",
+			para: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{
+						TextRun: &docs.TextRun{Content: "My Title\n"},
+					},
+				},
+			},
+			style: &docs.ParagraphStyle{
+				NamedStyleType: "TITLE",
+				HeadingId:      "h.title-id-456",
+			},
+			want:  "# My Title {#h.title-id-456}\n\n",
+		},
 	}
 
 	for _, tt := range tests {
@@ -250,5 +280,179 @@ func TestConvertTable(t *testing.T) {
 				t.Errorf("ConvertTable() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCodeBlocksAndTables(t *testing.T) {
+	doc := &docs.Document{
+		Title: "Test Document",
+		Body: &docs.Body{
+			Content: []*docs.StructuralElement{
+				// Native code block paragraph 1
+				{
+					Paragraph: &docs.Paragraph{
+						Elements: []*docs.ParagraphElement{
+							{
+								TextRun: &docs.TextRun{
+									Content: "\ue907",
+								},
+							},
+							{
+								TextRun: &docs.TextRun{
+									Content: "func main() {\n",
+									TextStyle: &docs.TextStyle{
+										WeightedFontFamily: &docs.WeightedFontFamily{FontFamily: "Roboto Mono"},
+									},
+								},
+							},
+						},
+					},
+				},
+				// Native code block paragraph 2 (empty line)
+				{
+					Paragraph: &docs.Paragraph{
+						Elements: []*docs.ParagraphElement{
+							{
+								TextRun: &docs.TextRun{
+									Content: "\ue907",
+								},
+							},
+							{
+								TextRun: &docs.TextRun{
+									Content: "\n",
+								},
+							},
+						},
+					},
+				},
+				// Native code block paragraph 3
+				{
+					Paragraph: &docs.Paragraph{
+						Elements: []*docs.ParagraphElement{
+							{
+								TextRun: &docs.TextRun{
+									Content: "\ue907",
+								},
+							},
+							{
+								TextRun: &docs.TextRun{
+									Content: "  println(\"hello\")\n",
+									TextStyle: &docs.TextStyle{
+										WeightedFontFamily: &docs.WeightedFontFamily{FontFamily: "Roboto Mono"},
+									},
+								},
+							},
+						},
+					},
+				},
+				// Normal paragraph to flush code block
+				{
+					Paragraph: &docs.Paragraph{
+						Elements: []*docs.ParagraphElement{
+							{
+								TextRun: &docs.TextRun{
+									Content: "This is some normal text.\n",
+								},
+							},
+						},
+						ParagraphStyle: &docs.ParagraphStyle{
+							NamedStyleType: "NORMAL_TEXT",
+						},
+					},
+				},
+				// Manual monospace block paragraph 1
+				{
+					Paragraph: &docs.Paragraph{
+						Elements: []*docs.ParagraphElement{
+							{
+								TextRun: &docs.TextRun{
+									Content: "echo \"hello\"\n",
+									TextStyle: &docs.TextStyle{
+										WeightedFontFamily: &docs.WeightedFontFamily{FontFamily: "Courier New"},
+									},
+								},
+							},
+						},
+					},
+				},
+				// Manual monospace block paragraph 2 (empty line)
+				{
+					Paragraph: &docs.Paragraph{
+						Elements: []*docs.ParagraphElement{
+							{
+								TextRun: &docs.TextRun{
+									Content: "\n",
+								},
+							},
+						},
+					},
+				},
+				// Manual monospace block paragraph 3
+				{
+					Paragraph: &docs.Paragraph{
+						Elements: []*docs.ParagraphElement{
+							{
+								TextRun: &docs.TextRun{
+									Content: "echo \"world\"\n",
+									TextStyle: &docs.TextStyle{
+										WeightedFontFamily: &docs.WeightedFontFamily{FontFamily: "Courier New"},
+									},
+								},
+							},
+						},
+					},
+				},
+				// Normal paragraph to flush manual block
+				{
+					Paragraph: &docs.Paragraph{
+						Elements: []*docs.ParagraphElement{
+							{
+								TextRun: &docs.TextRun{
+									Content: "End of script.\n",
+								},
+							},
+						},
+						ParagraphStyle: &docs.ParagraphStyle{
+							NamedStyleType: "NORMAL_TEXT",
+						},
+					},
+				},
+				// 1x1 table
+				{
+					Table: &docs.Table{
+						TableRows: []*docs.TableRow{
+							{
+								TableCells: []*docs.TableCell{
+									{
+										Content: []*docs.StructuralElement{
+											{
+												Paragraph: &docs.Paragraph{
+													Elements: []*docs.ParagraphElement{
+														{
+															TextRun: &docs.TextRun{
+																Content: "select * from users;\n",
+															},
+														},
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	converter := NewConverter(doc)
+	got := converter.convertBody()
+	
+	want := "```\nfunc main() {\n\n  println(\"hello\")\n```\n\nThis is some normal text.\n\n```\necho \"hello\"\n\necho \"world\"\n```\n\nEnd of script.\n\n```\nselect * from users;\n```\n\n"
+	
+	if got != want {
+		t.Errorf("convertBody() =\n%q\nwant =\n%q", got, want)
 	}
 }
