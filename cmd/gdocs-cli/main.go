@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -47,6 +48,7 @@ func main() {
 	accessTokenFlag := flag.String("access_token", "", "Path to OAuth access token JSON file (bypasses normal OAuth flow)")
 	initFlag := flag.Bool("init", false, "Initialize OAuth and save token to default location")
 	cleanFlag := flag.Bool("clean", false, "Clean output (suppress all logs, only output markdown)")
+	outputJSONFlag := flag.Bool("output-json", false, "Emit the exact structure of the doc received from the Docs API as pretty-printed JSON")
 	var comments commentsMode
 	flag.Var(&comments, "comments", "Include comments: --comments (all) or --comments=open (unresolved only)")
 	commentsSkipOlderThanFlag := flag.Int("comments-skip-older-than", 0, "Omit comments where the last update is older than the specified number of days")
@@ -109,7 +111,7 @@ func main() {
 	}
 
 	// Run the main logic
-	if err := run(*urlFlag, configPath, *accessTokenFlag, *fileFlag, *uploadCommentsFlag, *dryRunFlag, *commentsSkipOlderThanFlag, comments); err != nil {
+	if err := run(*urlFlag, configPath, *accessTokenFlag, *fileFlag, *uploadCommentsFlag, *dryRunFlag, *commentsSkipOlderThanFlag, comments, *outputJSONFlag); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -118,7 +120,7 @@ func main() {
 // run executes the main logic of the CLI.
 // It handles authentication, document fetching, and markdown conversion.
 // If accessTokenPath is non-empty it is used directly (bypassing credPath and the OAuth flow).
-func run(docURL, credPath, accessTokenPath, filePath string, uploadComments, dryRun bool, commentsSkipOlderThan int, comments commentsMode) error {
+func run(docURL, credPath, accessTokenPath, filePath string, uploadComments, dryRun bool, commentsSkipOlderThan int, comments commentsMode, outputJSON bool) error {
 	ctx := context.Background()
 
 	// Extract document ID from URL
@@ -183,6 +185,15 @@ func run(docURL, credPath, accessTokenPath, filePath string, uploadComments, dry
 	doc, err := client.FetchDocument(docID)
 	if err != nil {
 		return fmt.Errorf("failed to fetch document: %w", err)
+	}
+
+	if outputJSON {
+		jsonData, err := json.MarshalIndent(doc, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal document: %w", err)
+		}
+		fmt.Println(string(jsonData))
+		return nil
 	}
 
 	// Convert to markdown
