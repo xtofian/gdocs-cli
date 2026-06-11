@@ -142,11 +142,26 @@ func absOffset(segs []textSeg, bytePos int) int {
 	for _, s := range segs {
 		end := pos + len(s.text)
 		if end > bytePos {
-			return s.start + (bytePos - pos)
+			return s.start + byteToUTF16Index(s.text, bytePos-pos)
 		}
 		pos = end
 	}
 	return -1
+}
+
+func byteToUTF16Index(s string, byteIdx int) int {
+	uLen := 0
+	for i, r := range s {
+		if i >= byteIdx {
+			break
+		}
+		if r >= 0x10000 {
+			uLen += 2
+		} else {
+			uLen += 1
+		}
+	}
+	return uLen
 }
 
 type paraInfo struct {

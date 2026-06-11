@@ -129,6 +129,7 @@ func textRunWithAnchors(pe *docs.ParagraphElement, anchors map[int]string, regis
 
 	start := int(pe.StartIndex)
 	content := tr.Content
+	cLen := utf16Len(content)
 
 	type anchorPos struct {
 		local int
@@ -136,7 +137,7 @@ func textRunWithAnchors(pe *docs.ParagraphElement, anchors map[int]string, regis
 	}
 	var positions []anchorPos
 	for offset, id := range anchors {
-		if offset >= start && offset < start+len(content) {
+		if offset >= start && offset < start+cLen {
 			positions = append(positions, anchorPos{offset - start, id})
 		}
 	}
@@ -148,19 +149,52 @@ func textRunWithAnchors(pe *docs.ParagraphElement, anchors map[int]string, regis
 	sort.Slice(positions, func(i, j int) bool { return positions[i].local < positions[j].local })
 
 	var result strings.Builder
-	prev := 0
+	prevUTF16 := 0
 	for _, pos := range positions {
-		if pos.local > prev {
-			result.WriteString(ApplyTextStyle(content[prev:pos.local], tr.TextStyle))
+		if pos.local > prevUTF16 {
+			prevByte := utf16ToByteIndex(content, prevUTF16)
+			posByte := utf16ToByteIndex(content, pos.local)
+			result.WriteString(ApplyTextStyle(content[prevByte:posByte], tr.TextStyle))
 		}
 		result.WriteString(fmt.Sprintf("<!-- gdoc-comment: %s -->", pos.id))
 		if registerComment != nil {
 			registerComment(pos.id)
 		}
-		prev = pos.local
+		prevUTF16 = pos.local
 	}
-	if prev < len(content) {
-		result.WriteString(ApplyTextStyle(content[prev:], tr.TextStyle))
+	if prevUTF16 < cLen {
+		prevByte := utf16ToByteIndex(content, prevUTF16)
+		result.WriteString(ApplyTextStyle(content[prevByte:], tr.TextStyle))
 	}
 	return result.String()
+}
+
+func utf16Len(s string) int {
+	uLen := 0
+	for _, r := range s {
+		if r >= 0x10000 {
+			uLen += 2
+		} else {
+			uLen += 1
+		}
+	}
+	return uLen
+}
+
+func utf16ToByteIndex(s string, utf16Idx int) int {
+	if utf16Idx <= 0 {
+		return 0
+	}
+	currentUTF16 := 0
+	for byteIdx, r := range s {
+		if currentUTF16 >= utf16Idx {
+			return byteIdx
+		}
+		if r >= 0x10000 {
+			currentUTF16 += 2
+		} else {
+			currentUTF16 += 1
+		}
+	}
+	return len(s)
 }
