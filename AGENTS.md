@@ -80,8 +80,16 @@ Markdown output to stdout
 - **`internal/markdown`**: Conversion logic split into:
   - `converter.go`: Main orchestrator that drives the conversion
   - `frontmatter.go`: YAML frontmatter generation
-  - `text.go`: Text-level formatting (bold, italic, links)
+  - `text.go`: Text-level formatting (bold, italic, links), markdown escaping,
+    and coalescing of adjacent identically-styled runs
   - `structure.go`: Document structure (headings, lists, tables, paragraphs)
+
+**Markup must be unambiguous.** `escapeMarkdown` escapes literal
+metacharacters and `coalesceRuns` merges runs that render the same, so that
+parsing the output recovers the document's formatting exactly. Anything added
+to `text.go` that emits new markup needs a matching entry in the escape set —
+otherwise a document containing that character silently round-trips into
+different formatting. See "Markup Fidelity" in README.md.
 
 ### Google Docs API Structure
 

@@ -217,6 +217,10 @@ func extractTableCellText(cell *docs.TableCell) string {
 			text = strings.TrimSpace(text)
 			// Replace newlines with spaces for single-line cell content
 			text = strings.ReplaceAll(text, "\n", " ")
+			// A literal "|" would end the cell early. This is the one
+			// metacharacter whose meaning depends on being inside a table, so
+			// it is escaped here rather than in escapeMarkdown.
+			text = strings.ReplaceAll(text, "|", `\|`)
 			builder.WriteString(text)
 		}
 	}

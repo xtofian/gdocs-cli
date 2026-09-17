@@ -93,6 +93,80 @@ func TestApplyTextStyle(t *testing.T) {
 			style: &docs.TextStyle{WeightedFontFamily: &docs.WeightedFontFamily{FontFamily: "Consolas"}},
 			want:  "\n`newline_code`\n",
 		},
+		{
+			name:  "literal asterisks are escaped, not emitted as emphasis",
+			text:  "*continuous assurance at scale*",
+			style: nil,
+			want:  `\*continuous assurance at scale\*`,
+		},
+		{
+			name:  "literal asterisks inside an italic run stay literal",
+			text:  "3 * 4",
+			style: &docs.TextStyle{Italic: true},
+			want:  `*3 \* 4*`,
+		},
+		{
+			name:  "intraword underscores are left alone, delimiting ones are escaped",
+			text:  "see 2023_stubborn_weaknesses.html and _this_ word",
+			style: &docs.TextStyle{},
+			want:  `see 2023_stubborn_weaknesses.html and \_this\_ word`,
+		},
+		{
+			name:  "literal backtick, brackets and backslash are escaped",
+			text:  `a ` + "`" + `b [c] d \ e`,
+			style: &docs.TextStyle{},
+			want:  `a \` + "`" + `b \[c\] d \\ e`,
+		},
+		{
+			name:  "monospace content is fenced, not escaped",
+			text:  "args ...any",
+			style: &docs.TextStyle{WeightedFontFamily: &docs.WeightedFontFamily{FontFamily: "Roboto Mono"}},
+			want:  "`args ...any`",
+		},
+		{
+			name:  "monospace content containing a backtick widens the fence",
+			text:  "echo `date`",
+			style: &docs.TextStyle{WeightedFontFamily: &docs.WeightedFontFamily{FontFamily: "Roboto Mono"}},
+			// CommonMark strips one leading and one trailing space only as a
+			// pair, so the padding has to be symmetric.
+			want: "`` echo `date` ``",
+		},
+		{
+			name:  "bold run that is only a space gets no delimiters",
+			text:  " ",
+			style: &docs.TextStyle{Bold: true},
+			want:  " ",
+		},
+		{
+			name:  "bold run carrying the paragraph mark keeps it outside",
+			text:  "AI.\n",
+			style: &docs.TextStyle{Bold: true},
+			want:  "**AI.**\n",
+		},
+		{
+			name:  "bold run with a trailing space keeps it outside",
+			text:  "Exception processes ",
+			style: &docs.TextStyle{Bold: true},
+			want:  "**Exception processes** ",
+		},
+		{
+			name:  "italic run with surrounding space keeps it outside",
+			text:  " emergent property ",
+			style: &docs.TextStyle{Italic: true},
+			want:  " *emergent property* ",
+		},
+		{
+			name:  "strikethrough run with a trailing newline keeps it outside",
+			text:  "gone\n",
+			style: &docs.TextStyle{Strikethrough: true},
+			want:  "~~gone~~\n",
+		},
+		{
+			name:  "link destination with parentheses uses pointy brackets",
+			text:  "Ada",
+			style: &docs.TextStyle{Link: &docs.Link{Url: "https://en.wikipedia.org/wiki/Ada_(language)"}},
+			want:  "[Ada](<https://en.wikipedia.org/wiki/Ada_(language)>)",
+		},
 	}
 
 	for _, tt := range tests {
@@ -500,3 +574,91 @@ func TestOpenCommentsMobileBasicOmission(t *testing.T) {
 	}
 }
 
+func TestCoalesceAdjacentRuns(t *testing.T) {
+	tests := []struct {
+		name     string
+		elements []*docs.ParagraphElement
+		want     string
+	}{
+		{
+			name: "one italic phrase split across runs emits one span",
+			elements: []*docs.ParagraphElement{
+				{StartIndex: 1, TextRun: &docs.TextRun{Content: "you can achieve ", TextStyle: &docs.TextStyle{}}},
+				{StartIndex: 17, TextRun: &docs.TextRun{Content: "continuous", TextStyle: &docs.TextStyle{Italic: true}}},
+				{StartIndex: 27, TextRun: &docs.TextRun{Content: " assurance at ", TextStyle: &docs.TextStyle{Italic: true}}},
+				{StartIndex: 41, TextRun: &docs.TextRun{Content: "scale", TextStyle: &docs.TextStyle{Italic: true}}},
+				{StartIndex: 46, TextRun: &docs.TextRun{Content: ".", TextStyle: &docs.TextStyle{}}},
+			},
+			want: "you can achieve *continuous assurance at scale*.",
+		},
+		{
+			name: "runs differing only in font size still merge",
+			elements: []*docs.ParagraphElement{
+				{StartIndex: 1, TextRun: &docs.TextRun{Content: "emergent ", TextStyle: &docs.TextStyle{Italic: true, FontSize: &docs.Dimension{Magnitude: 11}}}},
+				{StartIndex: 10, TextRun: &docs.TextRun{Content: "property", TextStyle: &docs.TextStyle{Italic: true}}},
+			},
+			want: "*emergent property*",
+		},
+		{
+			name: "differently styled runs are left alone",
+			elements: []*docs.ParagraphElement{
+				{StartIndex: 1, TextRun: &docs.TextRun{Content: "bold", TextStyle: &docs.TextStyle{Bold: true}}},
+				{StartIndex: 5, TextRun: &docs.TextRun{Content: " and ", TextStyle: &docs.TextStyle{}}},
+				{StartIndex: 10, TextRun: &docs.TextRun{Content: "italic", TextStyle: &docs.TextStyle{Italic: true}}},
+			},
+			want: "**bold** and *italic*",
+		},
+		{
+			name: "adjacent code runs in different mono fonts merge into one span",
+			elements: []*docs.ParagraphElement{
+				{StartIndex: 1, TextRun: &docs.TextRun{Content: "notexist'", TextStyle: &docs.TextStyle{WeightedFontFamily: &docs.WeightedFontFamily{FontFamily: "Courier New"}}}},
+				{StartIndex: 10, TextRun: &docs.TextRun{Content: " OR ", TextStyle: &docs.TextStyle{WeightedFontFamily: &docs.WeightedFontFamily{FontFamily: "Roboto Mono"}}}},
+				{StartIndex: 14, TextRun: &docs.TextRun{Content: "album_id='xyz456", TextStyle: &docs.TextStyle{WeightedFontFamily: &docs.WeightedFontFamily{FontFamily: "Courier New"}}}},
+			},
+			want: "`notexist' OR album_id='xyz456`",
+		},
+		{
+			name: "runs with different link targets do not merge",
+			elements: []*docs.ParagraphElement{
+				{StartIndex: 1, TextRun: &docs.TextRun{Content: "a", TextStyle: &docs.TextStyle{Link: &docs.Link{Url: "https://a.example"}}}},
+				{StartIndex: 2, TextRun: &docs.TextRun{Content: "b", TextStyle: &docs.TextStyle{Link: &docs.Link{Url: "https://b.example"}}}},
+			},
+			want: "[a](https://a.example)[b](https://b.example)",
+		},
+		{
+			name: "a footnote reference between runs prevents merging",
+			elements: []*docs.ParagraphElement{
+				{StartIndex: 1, TextRun: &docs.TextRun{Content: "before", TextStyle: &docs.TextStyle{Italic: true}}},
+				{StartIndex: 7, FootnoteReference: &docs.FootnoteReference{FootnoteId: "fn1"}},
+				{StartIndex: 8, TextRun: &docs.TextRun{Content: "after", TextStyle: &docs.TextStyle{Italic: true}}},
+			},
+			want: "*before*[^fn1]*after*",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := convertElementsWithFootnotes(tt.elements, nil, func(string) {}, nil)
+			if got != tt.want {
+				t.Errorf("convertElementsWithFootnotes() = %q, want %q", got, tt.want)
+			}
+			if plain := ConvertParagraphElements(tt.elements); tt.elements[1].FootnoteReference == nil && plain != tt.want {
+				t.Errorf("ConvertParagraphElements() = %q, want %q", plain, tt.want)
+			}
+		})
+	}
+}
+
+// A comment anchor inside a styled phrase necessarily interrupts it: the HTML
+// marker cannot sit inside markdown emphasis delimiters.
+func TestCoalesceRunsSplitAtCommentAnchor(t *testing.T) {
+	elements := []*docs.ParagraphElement{
+		{StartIndex: 1, TextRun: &docs.TextRun{Content: "Language choice ", TextStyle: &docs.TextStyle{Bold: true}}},
+		{StartIndex: 17, TextRun: &docs.TextRun{Content: "is among the best", TextStyle: &docs.TextStyle{Bold: true}}},
+	}
+	got := convertElementsWithFootnotes(elements, map[int]string{17: "c1"}, nil, func(string) {})
+	want := "**Language choice** <!-- gdoc-comment: c1 -->**is among the best**"
+	if got != want {
+		t.Errorf("convertElementsWithFootnotes() = %q, want %q", got, want)
+	}
+}

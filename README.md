@@ -14,6 +14,8 @@ A command-line tool to fetch Google Docs content and convert it to Markdown with
 - Supports text formatting: bold, italic, strikethrough, links
 - Supports document structure: headings, lists (bullet and numbered), tables
 - Output to stdout for easy piping to files or other commands
+- Round-trip-safe markup: literal metacharacters in the document are escaped,
+  and a styled phrase always comes out as one span (see below)
 
 ## Prerequisites
 
@@ -270,6 +272,32 @@ This project uses gdocs-cli. Run `gdocs-cli --instruction` for usage.
 - Nested lists
 - Paragraphs
 - Tables
+
+### Markup Fidelity
+
+The output is meant to be parseable, not just readable — tools that diff it
+against the document to push edits back upstream depend on markup meaning
+exactly one thing. Two rules make that hold:
+
+**Literal metacharacters are escaped.** A document containing the six
+characters `*foo*` produces `\*foo\*`, not `*foo*`. Without this, a literal
+asterisk is indistinguishable from real italics, and a round-trip turns the
+one into the other. The escaped set is ``\ ` * _ [ ] < ~``, plus `|` inside
+table cells. Underscores flanked by alphanumerics are left alone, since
+CommonMark does not read `snake_case` as emphasis. Code spans are never
+escaped — their content is literal already — so a backtick in the text widens
+the fence instead.
+
+**A styled phrase is one span.** Google Docs splits runs for reasons that have
+nothing to do with appearance (edit boundaries, a font-size tweak), so one
+italic phrase can arrive as three runs. Adjacent runs that render identically
+are merged, giving `*continuous assurance at scale*` rather than
+`*continuous* assurance at *scale*`. Delimiters also stay flush against
+non-space text: a run whose styling covers a trailing space or the paragraph
+mark emits `**AI.**\n`, never `**AI.\n**`.
+
+A comment anchor landing inside a styled phrase still splits it, because an
+HTML comment marker cannot sit between emphasis delimiters.
 
 ### YAML Frontmatter
 The tool adds YAML frontmatter with document metadata:
