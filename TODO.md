@@ -18,3 +18,7 @@
 - [x] Coalesce adjacent runs that render identically
 - [ ] Escape block markers (`#`, `-`, `>`, `1.`) when a paragraph's text starts
       with one
+
+## Upstream sync
+- [ ] Move sync from the `sync-google-doc` skill into `gdocs-cli push`.
+      Design and integration test plan: [docs/sync-design.md](docs/sync-design.md)
