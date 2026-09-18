@@ -20,6 +20,9 @@ import (
 //go:embed instruction.txt
 var instructionText string
 
+// version is stamped at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 // commentsMode is a flag value that accepts bare --comments (meaning "all")
 // or --comments=open / --comments=all.
 type commentsMode string
@@ -56,7 +59,14 @@ func main() {
 	fileFlag := flag.String("file", "", "Path to local markdown/YAML file containing comment blocks for uploading")
 	dryRunFlag := flag.Bool("dry-run", false, "Simulate comment uploading and print reconciled updates without saving")
 	instructionFlag := flag.Bool("instruction", false, "Print integration instructions for AI coding agents")
+	versionFlag := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
+
+	// Handle version mode - print version and exit
+	if *versionFlag {
+		fmt.Println(version)
+		return
+	}
 
 	// Handle instruction mode - print instructions and exit
 	if *instructionFlag {
