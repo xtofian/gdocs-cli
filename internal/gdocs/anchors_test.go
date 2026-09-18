@@ -1,207 +1,259 @@
 package gdocs
 
 import (
+	"strings"
 	"testing"
 
 	"google.golang.org/api/docs/v1"
 )
 
-func TestParseMobileBasicHTML(t *testing.T) {
-	htmlStr := `<!DOCTYPE html>
-<html>
-<body>
-<p>This is a paragraph with a comment <a href="#cmnt1" id="cmnt_ref1">[a]</a> on a word.</p>
-<p>Another paragraph <a href="#cmnt2" id="cmnt_ref2">[b]</a> with another comment.</p>
-<div style="border:1px solid black;margin:5px">
-<a href="#cmnt_ref1" id="cmnt1">[a]</a><span>First comment body.</span>
-</div>
-<div style="border:1px solid black;margin:5px">
-<a href="#cmnt_ref2" id="cmnt2">[b]</a><span>Second comment body.</span>
-</div>
-</body>
-</html>`
-
-	footnotes, cleanText := ParseMobileBasicHTML(htmlStr)
-
-	// Verify footnotes
-	if len(footnotes) != 2 {
-		t.Fatalf("expected 2 footnotes, got %d", len(footnotes))
+// mobileBasic assembles a mobilebasic-shaped document: the body paragraphs
+// first, then one bordered box per comment or reply, in the same order.
+func mobileBasic(body string, boxes ...string) string {
+	var b strings.Builder
+	b.WriteString("<!DOCTYPE html><html><body>")
+	b.WriteString(body)
+	for i, text := range boxes {
+		n := i + 1
+		b.WriteString(`<div style="border:1px solid black;margin:5px"><p>`)
+		b.WriteString(`<a href="#cmnt_ref` + itoa(n) + `" id="cmnt` + itoa(n) + `">[x]</a>`)
+		b.WriteString(`<span>` + text + `</span></p></div>`)
 	}
-	if footnotes["1"] != "First comment body." {
-		t.Errorf("expected footnote '1' to be 'First comment body.', got %q", footnotes["1"])
-	}
-	if footnotes["2"] != "Second comment body." {
-		t.Errorf("expected footnote '2' to be 'Second comment body.', got %q", footnotes["2"])
-	}
-
-	// Verify clean text containing placeholders
-	expectedText := "This is a paragraph with a comment __CMNT_ANCHOR_1__ on a word.\nAnother paragraph __CMNT_ANCHOR_2__ with another comment."
-	if cleanText != expectedText {
-		t.Errorf("expected cleanText to be:\n%q\ngot:\n%q", expectedText, cleanText)
-	}
+	b.WriteString("</body></html>")
+	return b.String()
 }
 
-func TestAlignRunes(t *testing.T) {
-	tests := []struct {
-		name     string
-		s1       string
-		s2       string
-		index1   int
-		expected int
-	}{
-		{
-			name:     "exact match",
-			s1:       "hello world",
-			s2:       "hello world",
-			index1:   5,
-			expected: 5,
-		},
-		{
-			name:     "added character in s2",
-			s1:       "hello world",
-			s2:       "hello  world",
-			index1:   6,
-			expected: 7, // 'w' shifts to right
-		},
-		{
-			name:     "removed character in s2",
-			s1:       "hello world",
-			s2:       "helloworld",
-			index1:   6,
-			expected: 5, // space removed, 'w' shifts to left
-		},
-		{
-			name:     "utf8 smart quotes and spaces",
-			s1:       "hello \"world\"",
-			s2:       "hello “world”",
-			index1:   7,
-			expected: 7,
-		},
-	}
+// ref renders the inline superscript marker for the nth comment box.
+func ref(n int) string {
+	return `<sup><a href="#cmnt` + itoa(n) + `" id="cmnt_ref` + itoa(n) + `">[x]</a></sup>`
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r1 := []rune(tt.s1)
-			r2 := []rune(tt.s2)
-			alignment := alignRunes(r1, r2)
-			got := mapRuneIndex(tt.index1, alignment, len(r1), len(r2))
-			if got != tt.expected {
-				t.Errorf("alignRunes() mapped index %d to %d, expected %d", tt.index1, got, tt.expected)
-			}
+func itoa(n int) string {
+	if n < 10 {
+		return string(rune('0' + n))
+	}
+	return string(rune('0'+n/10)) + string(rune('0'+n%10))
+}
+
+// bodyOf builds a one-run-per-paragraph body starting at offset 1, the way the
+// Docs API numbers a document.
+func bodyOf(paragraphs ...string) *docs.Body {
+	body := &docs.Body{}
+	offset := int64(1)
+	for _, text := range paragraphs {
+		content := text + "\n"
+		body.Content = append(body.Content, &docs.StructuralElement{
+			StartIndex: offset,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{{
+					StartIndex: offset,
+					TextRun:    &docs.TextRun{Content: content},
+				}},
+			},
 		})
+		offset += int64(len([]rune(content)))
 	}
+	return body
 }
 
-func TestBuildAnchorResultWithMobileBasic(t *testing.T) {
-	// Setup mock Docs API document body
-	body := &docs.Body{
-		Content: []*docs.StructuralElement{
-			{
-				StartIndex: 1,
-				Paragraph: &docs.Paragraph{
-					Elements: []*docs.ParagraphElement{
-						{
-							StartIndex: 1,
-							TextRun: &docs.TextRun{
-								Content: "This is a paragraph with a comment on a word.",
-							},
-						},
-					},
-				},
-			},
-		},
+func TestBuildAnchorResult(t *testing.T) {
+	// The quoted text is "a", which occurs all over the paragraph: only the
+	// mobilebasic marker can say which occurrence the comment belongs to.
+	body := bodyOf("This is a paragraph with a comment on a word.")
+	comments := []Comment{{
+		ID:         "comment-abc",
+		Content:    "This is the comment text.",
+		QuotedText: "a",
+	}}
+	html := mobileBasic(
+		"<p>This is a paragraph with a comment "+ref(1)+" on a word.</p>",
+		"This is the comment text.",
+	)
+
+	res := BuildAnchorResult(body, comments, html)
+
+	// "This is a paragraph with a comment" is 34 characters from offset 1, so
+	// the marker lands just past it, at 35.
+	const want = 35
+	if got := res.Offsets[want]; len(got) != 1 || got[0] != "comment-abc" {
+		t.Errorf("Offsets[%d] = %v, want [comment-abc]; full result %v", want, got, res.Offsets)
 	}
-
-	// Setup matching comment with ambiguous text ("a")
-	comments := []Comment{
-		{
-			ID:          "comment-abc",
-			Content:     "This is the comment text.",
-			QuotedText:  "a", // "a" appears multiple times, so standard search would be ambiguous
-			CreatedTime: "2026-06-08T12:00:00Z",
-		},
-	}
-
-	// Setup mobilebasic HTML
-	mobileHTML := `<!DOCTYPE html>
-<html>
-<body>
-<p>This is a paragraph with a comment <a href="#cmnt1" id="cmnt_ref1">[a]</a> on a word.</p>
-<div style="border:1px solid black;margin:5px">
-<a href="#cmnt_ref1" id="cmnt1">[a]</a><span>This is the comment text.</span>
-</div>
-</body>
-</html>`
-
-	res := BuildAnchorResultWithMobileBasic(body, comments, mobileHTML)
-
-	// The comment is anchored right after "comment" and before " on a word" in:
-	// "This is a paragraph with a comment on a word."
-	// Index of "comment" is 27. Length of "comment" is 7. StartIndex is 1.
-	// So offset should be 1 + 27 + 7 = 35.
-	expectedOffset := 35
-	expectedID := "comment-abc"
-
-	if res.Offsets[expectedOffset] != expectedID {
-		t.Errorf("expected comment comment-abc to be anchored at offset %d with ID %q, got %q at offset %d", expectedOffset, expectedID, res.Offsets[expectedOffset], expectedOffset)
-	}
-
 	if len(res.AnchoredIDs) != 1 || res.AnchoredIDs[0] != "comment-abc" {
-		t.Errorf("expected anchored ID list to contain comment-abc, got %v", res.AnchoredIDs)
+		t.Errorf("AnchoredIDs = %v, want [comment-abc]", res.AnchoredIDs)
+	}
+	if len(res.UnanchoredIDs) != 0 {
+		t.Errorf("UnanchoredIDs = %v, want none", res.UnanchoredIDs)
 	}
 }
 
-func TestBuildAnchorResultWithMobileBasic_MultiTabOmission(t *testing.T) {
-	// Setup mock Docs API document body for the current tab (contains paragraph A)
-	body := &docs.Body{
-		Content: []*docs.StructuralElement{
-			{
-				StartIndex: 1,
-				Paragraph: &docs.Paragraph{
-					Elements: []*docs.ParagraphElement{
-						{
-							StartIndex: 1,
-							TextRun: &docs.TextRun{
-								Content: "Paragraph in current tab.",
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	// Comment on tab 2's identical paragraph
+func TestBuildAnchorResultRepliesDoNotStealAnchors(t *testing.T) {
+	// The first thread's reply says "+1", and so does a second thread anchored
+	// further down. Matching boxes to threads one at a time, without accounting
+	// for replies, would anchor the second thread on the first one's reply box.
+	body := bodyOf(
+		"Memory safety is the first topic we cover here.",
+		"Supply chain integrity is the second topic we cover.",
+	)
 	comments := []Comment{
 		{
-			ID:          "comment-tab2",
-			Content:     "This comment is on the second tab.",
-			QuotedText:  "current tab",
-			CreatedTime: "2026-06-08T12:00:00Z",
+			ID:      "thread-1",
+			Content: "Worth mentioning hardened libc++ too.",
+			Replies: []Reply{{Author: "Reviewer", Content: "+1"}},
 		},
+		{ID: "thread-2", Content: "+1"},
 	}
+	html := mobileBasic(
+		"<p>Memory safety is the first topic we cover here."+ref(1)+ref(2)+"</p>"+
+			"<p>Supply chain integrity is the second topic we cover."+ref(3)+"</p>",
+		"Worth mentioning hardened libc++ too.", "+1", "+1",
+	)
 
-	// Setup mobilebasic HTML containing text of Tab 1 AND Tab 2.
-	// Tab 1: "Paragraph in current tab." (without any comment)
-	// Tab 2: "Some other text on tab 2."
-	//        "Paragraph in current tab." with comment-tab2 [a]
-	mobileHTML := `<!DOCTYPE html>
-<html>
-<body>
-<p>Paragraph in current tab.</p>
-<p>Some other text on tab 2.</p>
-<p>Paragraph in current tab <a href="#cmnt1" id="cmnt_ref1">[a]</a>.</p>
-<div style="border:1px solid black;margin:5px">
-<a href="#cmnt_ref1" id="cmnt1">[a]</a><span>This comment is on the second tab.</span>
-</div>
-</body>
-</html>`
+	res := BuildAnchorResult(body, comments, html)
 
-	res := BuildAnchorResultWithMobileBasic(body, comments, mobileHTML)
+	if len(res.AnchoredIDs) != 2 {
+		t.Fatalf("AnchoredIDs = %v, want both threads anchored", res.AnchoredIDs)
+	}
+	first, second := res.AnchoredIDs[0], res.AnchoredIDs[1]
+	if first != "thread-1" || second != "thread-2" {
+		t.Errorf("AnchoredIDs = %v, want [thread-1 thread-2]", res.AnchoredIDs)
+	}
+	// thread-2 belongs to the second paragraph, past the end of the first.
+	var offset1, offset2 int
+	for off, ids := range res.Offsets {
+		for _, id := range ids {
+			if id == "thread-1" {
+				offset1 = off
+			} else {
+				offset2 = off
+			}
+		}
+	}
+	if offset2 <= offset1+len("Memory safety is the first topic we cover here.") {
+		t.Errorf("thread-2 anchored at %d, expected it in the second paragraph (thread-1 at %d)", offset2, offset1)
+	}
+}
 
-	// Since Tab 1 does not have the comment, and sequence alignment maps the current tab's paragraph
-	// to the first paragraph in mobilebasic (which has no comment), the comment should NOT be matched to our paragraph.
-	if len(res.Offsets) > 0 {
-		t.Errorf("expected no comments to be anchored in the current tab, but got anchored offsets: %v", res.Offsets)
+func TestBuildAnchorResultSharedOffset(t *testing.T) {
+	// Two threads on the same word: both anchors are kept, in document order.
+	body := bodyOf("Language choice is the most consequential decision.")
+	comments := []Comment{
+		{ID: "second", Content: "Also worth saying."},
+		{ID: "first", Content: "Worth saying."},
+	}
+	html := mobileBasic(
+		"<p>Language choice"+ref(1)+ref(2)+" is the most consequential decision.</p>",
+		"Worth saying.", "Also worth saying.",
+	)
+
+	res := BuildAnchorResult(body, comments, html)
+
+	if len(res.Offsets) != 1 {
+		t.Fatalf("Offsets = %v, want a single shared offset", res.Offsets)
+	}
+	for _, ids := range res.Offsets {
+		if len(ids) != 2 || ids[0] != "first" || ids[1] != "second" {
+			t.Errorf("shared offset holds %v, want [first second]", ids)
+		}
+	}
+}
+
+func TestBuildAnchorResultOtherTab(t *testing.T) {
+	// mobilebasic renders every tab; the body being converted is only one of
+	// them. A comment on another tab's copy of a paragraph must not be placed
+	// on this tab's copy.
+	body := bodyOf("Paragraph in current tab.")
+	comments := []Comment{{
+		ID:         "comment-tab2",
+		Content:    "This comment is on the second tab.",
+		QuotedText: "current tab",
+	}}
+	html := mobileBasic(
+		"<p>Paragraph in current tab.</p>"+
+			"<p>Some other text on tab 2.</p>"+
+			"<p>Paragraph in current tab"+ref(1)+".</p>",
+		"This comment is on the second tab.",
+	)
+
+	res := BuildAnchorResult(body, comments, html)
+
+	if len(res.Offsets) != 0 {
+		t.Errorf("Offsets = %v, want the comment left unanchored", res.Offsets)
+	}
+	if len(res.UnanchoredIDs) != 1 || res.UnanchoredIDs[0] != "comment-tab2" {
+		t.Errorf("UnanchoredIDs = %v, want [comment-tab2]", res.UnanchoredIDs)
+	}
+}
+
+func TestBuildAnchorResultDeletedAnchorText(t *testing.T) {
+	// A thread whose anchor text is gone gets no marker in mobilebasic, so it
+	// must not borrow the marker of the thread that is still anchored.
+	body := bodyOf("Any non-trivial C++ codebase contains memory safety violations.")
+	comments := []Comment{
+		{ID: "live", Content: "Surprised not to see libc++ mentioned."},
+		{ID: "orphan", Content: "I am not sure the argument is sound."},
+	}
+	html := mobileBasic(
+		"<p>Any non-trivial C++ codebase contains memory safety violations."+ref(1)+"</p>",
+		"Surprised not to see libc++ mentioned.",
+	)
+
+	res := BuildAnchorResult(body, comments, html)
+
+	if len(res.AnchoredIDs) != 1 || res.AnchoredIDs[0] != "live" {
+		t.Errorf("AnchoredIDs = %v, want [live]", res.AnchoredIDs)
+	}
+	if len(res.UnanchoredIDs) != 1 || res.UnanchoredIDs[0] != "orphan" {
+		t.Errorf("UnanchoredIDs = %v, want [orphan]", res.UnanchoredIDs)
+	}
+}
+
+func TestBuildAnchorResultNoMobileBasic(t *testing.T) {
+	body := bodyOf("Some text with a comment on it.")
+	comments := []Comment{{ID: "c1", Content: "A comment.", QuotedText: "a comment"}}
+
+	res := BuildAnchorResult(body, comments, "")
+
+	if len(res.Offsets) != 0 {
+		t.Errorf("Offsets = %v, want none without mobilebasic HTML", res.Offsets)
+	}
+	if len(res.UnanchoredIDs) != 1 {
+		t.Errorf("UnanchoredIDs = %v, want [c1]", res.UnanchoredIDs)
+	}
+}
+
+func TestParseMobileBasic(t *testing.T) {
+	html := mobileBasic(
+		"<p>First paragraph"+ref(1)+" continues.</p><p>Second"+ref(2)+" paragraph.</p>",
+		"First comment body.", "Second comment body.",
+	)
+
+	v := parseMobileBasic(html)
+
+	if got := string(v.text.buf); got != "FirstparagraphcontinuesSecondparagraph" {
+		t.Errorf("transcript = %q, want only the body's letters and digits", got)
+	}
+	if len(v.markers) != 2 {
+		t.Fatalf("markers = %v, want 2", v.markers)
+	}
+	if v.markers[0].pos != len("Firstparagraph") || v.markers[1].pos != len("FirstparagraphcontinuesSecond") {
+		t.Errorf("marker positions = %d, %d; want %d, %d",
+			v.markers[0].pos, v.markers[1].pos, len("Firstparagraph"), len("FirstparagraphcontinuesSecond"))
+	}
+	if v.boxes["cmnt1"] != "First comment body." || v.boxes["cmnt2"] != "Second comment body." {
+		t.Errorf("boxes = %v, want the two comment bodies", v.boxes)
+	}
+}
+
+func TestNormalizeBoxText(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"I'm  not sure.", "i m not sure"},
+		{"+1", "1"},
+		{"“Smart quotes” — and dashes", "smart quotes and dashes"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := normalizeBoxText(tt.in); got != tt.want {
+			t.Errorf("normalizeBoxText(%q) = %q, want %q", tt.in, got, tt.want)
+		}
 	}
 }

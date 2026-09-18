@@ -17,55 +17,12 @@ func formatHeadingWithAnchor(text string, level int, headingId string) string {
 
 // convertParagraphWithFootnotes is the full-featured paragraph converter with
 // anchor and footnote reference support.
-func convertParagraphWithFootnotes(paragraph *docs.Paragraph, style *docs.ParagraphStyle, anchors map[int]string, registerFootnote func(id string), registerComment func(id string)) string {
+func convertParagraphWithFootnotes(paragraph *docs.Paragraph, style *docs.ParagraphStyle, anchors map[int][]string, registerFootnote func(id string), registerComment func(id string)) string {
 	if paragraph == nil {
 		return ""
 	}
 
 	text := convertElementsWithFootnotes(paragraph.Elements, anchors, registerFootnote, registerComment)
-	text = strings.TrimRight(text, "\n")
-
-	if text == "" {
-		return "\n"
-	}
-
-	if style != nil && style.NamedStyleType != "" {
-		headingID := style.HeadingId
-		switch style.NamedStyleType {
-		case "TITLE":
-			return formatHeadingWithAnchor(text, 1, headingID)
-		case "SUBTITLE":
-			return formatHeadingWithAnchor(text, 2, headingID)
-		case "HEADING_1":
-			return formatHeadingWithAnchor(text, 1, headingID)
-		case "HEADING_2":
-			return formatHeadingWithAnchor(text, 2, headingID)
-		case "HEADING_3":
-			return formatHeadingWithAnchor(text, 3, headingID)
-		case "HEADING_4":
-			return formatHeadingWithAnchor(text, 4, headingID)
-		case "HEADING_5":
-			return formatHeadingWithAnchor(text, 5, headingID)
-		case "HEADING_6":
-			return formatHeadingWithAnchor(text, 6, headingID)
-		}
-	}
-
-	if paragraph.Bullet != nil {
-		return convertListItem(text, paragraph.Bullet)
-	}
-
-	return text + "\n\n"
-}
-
-// convertParagraphInternal is the anchor-aware version of ConvertParagraph.
-// anchors maps absolute character offset → comment ID.
-func convertParagraphInternal(paragraph *docs.Paragraph, style *docs.ParagraphStyle, anchors map[int]string) string {
-	if paragraph == nil {
-		return ""
-	}
-
-	text := convertParagraphElementsInternal(paragraph.Elements, anchors)
 	text = strings.TrimRight(text, "\n")
 
 	if text == "" {

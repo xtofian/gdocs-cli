@@ -49,7 +49,7 @@ func TestConvertComments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ConvertComments(tt.comments, nil, nil)
+			got := ConvertComments(tt.comments)
 			if tt.wantSub == "" {
 				if got != "" {
 					t.Errorf("ConvertComments() = %q, want empty", got)

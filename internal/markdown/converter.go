@@ -10,22 +10,19 @@ import (
 
 // Converter handles the conversion of Google Docs to markdown.
 type Converter struct {
-	doc           *docs.Document
-	body          *docs.Body
-	title         string
-	tabName       string
-	comments      []gdocs.Comment
-	commentMap    map[string]gdocs.Comment // Maps comment ID -> Comment
-	anchorOffsets map[int]string           // absolute char offset → comment ID
-	anchoredIDs   map[string]bool          // comment IDs with a unique body anchor
-	ambiguousIDs  map[string]bool          // comment IDs with repeated/missing quoted text
-	deletedIDs    map[string]bool          // comment IDs on text no longer in the document
-	anchorOrder   []string                 // anchored comment IDs in document order
-	footnoteMap   map[string]docs.Footnote // footnote ID → content
-	footnoteOrder []string                 // footnote IDs in document order (preserved for compatibility/legacy, though not used in new design)
-	footnoteSeen  map[string]bool          // tracks which footnote IDs have been registered
-	openCommentsOnly     bool              // whether --comments=open mode is active
-	mobileBasicSucceeded bool              // whether mobilebasic HTML fetch/parse succeeded
+	doc              *docs.Document
+	body             *docs.Body
+	title            string
+	tabName          string
+	comments         []gdocs.Comment
+	commentMap       map[string]gdocs.Comment // Maps comment ID -> Comment
+	anchorOffsets    map[int][]string         // absolute char offset → comment IDs
+	anchoredIDs      map[string]bool          // comment IDs anchored in the body
+	anchorOrder      []string                 // anchored comment IDs in document order
+	footnoteMap      map[string]docs.Footnote // footnote ID → content
+	footnoteOrder    []string                 // footnote IDs in document order (preserved for compatibility/legacy, though not used in new design)
+	footnoteSeen     map[string]bool          // tracks which footnote IDs have been registered
+	openCommentsOnly bool                     // whether --comments=open mode is active
 }
 
 type section struct {
@@ -116,18 +113,10 @@ func (c *Converter) SetComments(comments []gdocs.Comment, mobileBasicHTML string
 	for _, cm := range comments {
 		c.commentMap[cm.ID] = cm
 	}
-	var res gdocs.AnchorResult
-	if mobileBasicHTML != "" {
-		res = gdocs.BuildAnchorResultWithMobileBasic(c.body, comments, mobileBasicHTML)
-		c.mobileBasicSucceeded = true
-	} else {
-		res = gdocs.BuildAnchorResult(c.body, comments)
-	}
+	res := gdocs.BuildAnchorResult(c.body, comments, mobileBasicHTML)
 	c.anchorOffsets = res.Offsets
 	c.anchorOrder = res.AnchoredIDs
 	c.anchoredIDs = toIDSet(res.AnchoredIDs)
-	c.ambiguousIDs = toIDSet(res.AmbiguousIDs)
-	c.deletedIDs = toIDSet(res.DeletedIDs)
 }
 
 // SetOpenCommentsOnly sets whether --comments=open mode is active.
@@ -161,16 +150,16 @@ func (c *Converter) Convert() (string, error) {
 		builder.WriteString(body)
 	}
 
-	// Append remaining comments (ambiguous and deleted) if present.
+	// Append the comments that could not be anchored in the body.
 	if len(c.comments) > 0 {
-		_, ambiguous, deleted := c.splitComments()
-		if len(ambiguous) > 0 || len(deleted) > 0 {
+		_, unattached := c.splitComments()
+		if len(unattached) > 0 {
 			bodyStr := builder.String()
 			bodyStr = strings.TrimRight(bodyStr, " \t\r\n")
 			builder.Reset()
 			builder.WriteString(bodyStr)
 			builder.WriteString("\n\n\n") // Two blank lines before "## Comments"
-			builder.WriteString(ConvertComments(nil, ambiguous, deleted))
+			builder.WriteString(ConvertComments(unattached))
 		}
 	}
 
@@ -200,27 +189,22 @@ func (c *Converter) generateFrontmatter() (string, error) {
 	return frontmatter, nil
 }
 
-// splitComments partitions c.comments into three ordered slices:
-// anchored (in document order), ambiguous, and deleted.
-func (c *Converter) splitComments() (anchored, ambiguous, deleted []gdocs.Comment) {
+// splitComments partitions c.comments into the ones anchored in the body, in
+// document order, and the rest, in the order they were fetched.
+func (c *Converter) splitComments() (anchored, unattached []gdocs.Comment) {
 	byID := make(map[string]gdocs.Comment, len(c.comments))
 	for _, cm := range c.comments {
 		byID[cm.ID] = cm
 	}
 
-	// Anchored: use the document-order ID list from anchor resolution.
 	for _, id := range c.anchorOrder {
 		if cm, ok := byID[id]; ok {
 			anchored = append(anchored, cm)
 		}
 	}
-
-	// Ambiguous and deleted: preserve the order they appear in c.comments.
 	for _, cm := range c.comments {
-		if c.ambiguousIDs[cm.ID] {
-			ambiguous = append(ambiguous, cm)
-		} else if c.deletedIDs[cm.ID] {
-			deleted = append(deleted, cm)
+		if !c.anchoredIDs[cm.ID] {
+			unattached = append(unattached, cm)
 		}
 	}
 	return
@@ -269,14 +253,10 @@ func (c *Converter) convertBody() string {
 			}
 
 			registerComment := func(id string) {
-				baseID := id
-				if idx := strings.Index(id, ","); idx != -1 {
-					baseID = id[:idx]
-				}
 				// Only register if it's an anchored comment
-				if c.anchoredIDs[baseID] && !sec.commentSeen[baseID] {
-					sec.commentSeen[baseID] = true
-					sec.commentOrder = append(sec.commentOrder, baseID)
+				if c.anchoredIDs[id] && !sec.commentSeen[id] {
+					sec.commentSeen[id] = true
+					sec.commentOrder = append(sec.commentOrder, id)
 				}
 			}
 
@@ -470,7 +450,7 @@ func extractParagraphRawText(paragraph *docs.Paragraph) string {
 	return sb.String()
 }
 
-func registerParagraphCommentsAndFootnotes(paragraph *docs.Paragraph, registerFootnote func(id string), registerComment func(id string), anchors map[int]string) {
+func registerParagraphCommentsAndFootnotes(paragraph *docs.Paragraph, registerFootnote func(id string), registerComment func(id string), anchors map[int][]string) {
 	if paragraph == nil {
 		return
 	}
@@ -480,10 +460,9 @@ func registerParagraphCommentsAndFootnotes(paragraph *docs.Paragraph, registerFo
 		}
 		if element.TextRun != nil && registerComment != nil && len(anchors) > 0 {
 			start := int(element.StartIndex)
-			content := element.TextRun.Content
-			cLen := utf16Len(content)
-			for offset, id := range anchors {
-				if offset >= start && offset < start+cLen {
+			cLen := utf16Len(element.TextRun.Content)
+			for _, offset := range anchorOffsetsIn(anchors, start, start+cLen) {
+				for _, id := range anchors[offset] {
 					registerComment(id)
 				}
 			}

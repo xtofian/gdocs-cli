@@ -76,13 +76,26 @@ Markdown output to stdout
 
 - **`cmd/gdocs-cli`**: CLI entry point, flag parsing, orchestration. No business logic here.
 - **`internal/auth`**: OAuth2 flow, token caching, credential loading. Handles all authentication concerns.
-- **`internal/gdocs`**: Google Docs API client wrapper and URL parsing. Fetches documents from the API.
+- **`internal/gdocs`**: Google Docs API client wrapper, URL parsing, and comment
+  handling. `comments.go` fetches and uploads comments through the Drive API;
+  `anchors.go` works out where each comment thread attaches to the body.
 - **`internal/markdown`**: Conversion logic split into:
   - `converter.go`: Main orchestrator that drives the conversion
   - `frontmatter.go`: YAML frontmatter generation
   - `text.go`: Text-level formatting (bold, italic, links), markdown escaping,
     and coalescing of adjacent identically-styled runs
   - `structure.go`: Document structure (headings, lists, tables, paragraphs)
+
+**Comment placement runs off mobilebasic, not the Drive anchor.** The `anchor`
+field on a Docs comment is an opaque `kix.*` identifier, and `quotedFileContent`
+is too often a single word to locate. `anchors.go` instead reads the document's
+mobilebasic rendering, which marks every open thread inline, pairs each marker
+with a thread by matching the comment text Docs prints below the document, and
+carries the position over to a Docs API offset by searching the body for the
+letters and digits that precede the marker. Anything that changes how the body
+is rendered to markdown needs to keep `indexBody` in step: an offset it produces
+for a position the converter cannot emit a marker at would drop the comment from
+the output entirely (`snap` guards the case of runs with gaps between them).
 
 **Markup must be unambiguous.** `escapeMarkdown` escapes literal
 metacharacters and `coalesceRuns` merges runs that render the same, so that

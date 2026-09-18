@@ -1,712 +1,428 @@
 package gdocs
 
 import (
-	"html"
+	"bytes"
 	"log"
-	"regexp"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	nethtml "golang.org/x/net/html"
 	"google.golang.org/api/docs/v1"
 )
 
-var htmlTagRe = regexp.MustCompile(`<[^>]+>`)
-
-func stripHTML(s string) string {
-	s = htmlTagRe.ReplaceAllString(s, "")
-	return html.UnescapeString(s)
-}
-
-// textSeg pairs a document character start offset with a text run's content.
-type textSeg struct {
-	start int
-	text  string
-}
-
-// AnchorResult categorises comments by how well their anchor could be located.
+// AnchorResult records where each comment thread attaches to the document body.
 type AnchorResult struct {
-	// Offsets maps absolute character offset → comment ID for uniquely-located comments.
-	Offsets map[int]string
-	// AnchoredIDs lists comment IDs with a unique text match, sorted by document position.
+	// Offsets maps an absolute document character offset to the IDs of the
+	// comments anchored there, in the order the document shows them.
+	Offsets map[int][]string
+	// AnchoredIDs lists every ID in Offsets, in document order.
 	AnchoredIDs []string
-	// AmbiguousIDs lists comment IDs whose quoted text appears more than once, or is absent.
-	AmbiguousIDs []string
-	// DeletedIDs lists comment IDs whose quoted text is no longer present in the document.
-	DeletedIDs []string
+	// UnanchoredIDs lists the comments that could not be placed in the body,
+	// in the order they were passed in.
+	UnanchoredIDs []string
 }
 
-// BuildAnchorResult resolves each comment's position in the document body by
-// searching for its quoted text.
+// BuildAnchorResult resolves each comment thread's position in the document body.
 //
-// Note on the Drive API anchor field: for Google Docs comments the anchor is an
-// opaque internal "kix.*" identifier that cannot be decoded into a character
-// range via any public API. We locate comments by searching their quotedFileContent
-// text instead. An anchor is only emitted when the text is unambiguous (exactly
-// one match); otherwise the comment is placed in AmbiguousIDs or DeletedIDs.
-func BuildAnchorResult(body *docs.Body, comments []Comment) AnchorResult {
-	res := AnchorResult{Offsets: make(map[int]string)}
-	if body == nil {
-		for _, c := range comments {
-			res.AmbiguousIDs = append(res.AmbiguousIDs, c.ID)
-		}
-		return res
-	}
+// Neither field the Drive API gives us is enough on its own. The anchor is an
+// opaque "kix.*" identifier that no public API resolves to a character range,
+// and quotedFileContent is often too short to locate — on a real chapter draft,
+// quoted text such as "Go", "both" or "." placed fewer than a fifth of the
+// threads unambiguously. (The Docs API grew a commentsViewMode parameter that
+// would give us ranges directly, but as of September 2026 it is still restricted
+// to the Workspace Developer Preview program.)
+//
+// The document's mobilebasic rendering, though, marks every open thread inline,
+// so we read the positions from there and carry them over to Docs API offsets:
+//
+//  1. Parse mobilebasic into a transcript of the document text, the position of
+//     each inline comment marker within it, and the text of the box each marker
+//     links to.
+//  2. Pair each thread with its marker by matching box text against thread
+//     content, consuming the boxes of the thread's replies as we go.
+//  3. Project the body into the same form and carry each marker over by
+//     searching for the text that precedes it.
+//
+// Both sides are reduced to letters and digits, which makes step 3 immune to the
+// differences in whitespace, entity escaping and punctuation between the two
+// renderings, and lets a single substring search stand in for the sequence
+// alignment this used to do.
+//
+// Comments that mobilebasic does not mark (resolved threads, and threads whose
+// anchor text has been deleted) and comments whose marker sits outside the body
+// being converted (another tab, or a footnote) end up in UnanchoredIDs.
+func BuildAnchorResult(body *docs.Body, comments []Comment, mobileBasicHTML string) AnchorResult {
+	res := AnchorResult{Offsets: make(map[int][]string)}
 
-	// Build paragraph index once.
-	type para struct {
-		segs     []textSeg
-		paraText string
-	}
-	var paras []para
-	for _, elem := range body.Content {
-		if elem.Paragraph == nil {
-			continue
-		}
-		var segs []textSeg
-		var sb strings.Builder
-		for _, pe := range elem.Paragraph.Elements {
-			if pe.TextRun != nil && pe.TextRun.Content != "" {
-				segs = append(segs, textSeg{int(pe.StartIndex), pe.TextRun.Content})
-				sb.WriteString(pe.TextRun.Content)
-			}
-		}
-		paras = append(paras, para{segs, sb.String()})
-	}
+	mobile := parseMobileBasic(mobileBasicHTML)
+	bodyText := indexBody(body)
+	markers := assignMarkers(mobile, comments)
 
-	// offsets collects (offset, commentID) pairs for anchored comments so we can
-	// sort them into document order afterwards.
-	type anchoredEntry struct {
+	type placement struct {
 		offset int
+		order  int
 		id     string
 	}
-	var anchored []anchoredEntry
-
+	var placed []placement
+	anchored := make(map[string]bool, len(comments))
 	for _, c := range comments {
-		if c.ID == "" {
+		m, ok := markers[c.ID]
+		if !ok {
 			continue
 		}
-		if c.QuotedText == "" {
-			// No quoted text — can't determine location.
-			res.AmbiguousIDs = append(res.AmbiguousIDs, c.ID)
+		offset, ok := bodyText.locate(&mobile.text, m.pos)
+		if !ok {
 			continue
 		}
-		quoted := stripHTML(c.QuotedText)
-		if quoted == "" {
-			res.AmbiguousIDs = append(res.AmbiguousIDs, c.ID)
-			continue
-		}
+		placed = append(placed, placement{offset: offset, order: m.order, id: c.ID})
+		anchored[c.ID] = true
+	}
 
-		var matches []int
-		for _, p := range paras {
-			haystack := p.paraText
-			searchFrom := 0
-			for {
-				idx := strings.Index(haystack[searchFrom:], quoted)
-				if idx < 0 {
-					break
-				}
-				abs := absOffset(p.segs, searchFrom+idx)
-				if abs >= 0 {
-					matches = append(matches, abs)
-				}
-				searchFrom += idx + 1
-			}
+	// Several threads can share an offset: replies aside, two people can comment
+	// on the same word. Document order breaks the tie.
+	sort.Slice(placed, func(i, j int) bool {
+		if placed[i].offset != placed[j].offset {
+			return placed[i].offset < placed[j].offset
 		}
-
-		switch len(matches) {
-		case 0:
-			res.DeletedIDs = append(res.DeletedIDs, c.ID)
-		case 1:
-			res.Offsets[matches[0]] = c.ID
-			anchored = append(anchored, anchoredEntry{matches[0], c.ID})
-		default:
-			log.Printf("Comment %s: quoted text appears %d times; anchor skipped (ambiguous)", c.ID, len(matches))
-			res.AmbiguousIDs = append(res.AmbiguousIDs, c.ID)
+		return placed[i].order < placed[j].order
+	})
+	for _, p := range placed {
+		res.Offsets[p.offset] = append(res.Offsets[p.offset], p.id)
+		res.AnchoredIDs = append(res.AnchoredIDs, p.id)
+	}
+	for _, c := range comments {
+		if !anchored[c.ID] {
+			res.UnanchoredIDs = append(res.UnanchoredIDs, c.ID)
 		}
 	}
 
-	// Return anchored IDs in document order (ascending offset).
-	sort.Slice(anchored, func(i, j int) bool { return anchored[i].offset < anchored[j].offset })
-	for _, e := range anchored {
-		res.AnchoredIDs = append(res.AnchoredIDs, e.id)
-	}
-
+	log.Printf("Anchored %d of %d comment thread(s) in the document body", len(res.AnchoredIDs), len(comments))
 	return res
 }
 
-// absOffset maps a byte position within the concatenated paragraph text back to
-// an absolute document character offset using the segment table.
-func absOffset(segs []textSeg, bytePos int) int {
-	pos := 0
-	for _, s := range segs {
-		end := pos + len(s.text)
-		if end > bytePos {
-			return s.start + byteToUTF16Index(s.text, bytePos-pos)
-		}
-		pos = end
+// marker is one inline comment marker in the mobilebasic rendering.
+type marker struct {
+	key   string // the N in the "cmntN" the marker links to
+	order int    // the marker's index in document order
+	pos   int    // position in the transcript, in retained characters
+}
+
+// mobileView is what we need out of a document's mobilebasic rendering.
+type mobileView struct {
+	text    alnumText
+	markers []marker
+	boxes   map[string]string // "cmntN" key → text of the comment or reply box
+}
+
+// parseMobileBasic reads a mobilebasic rendering into a mobileView.
+//
+// Docs renders every open thread twice: as an <a href="#cmntN"> superscript at
+// the point it is anchored, and, after the whole document, as a bordered box
+// holding one comment or reply behind an <a id="cmntN"> backlink. Every marker
+// therefore precedes every box, which is what lets a single pass tell document
+// text from box text without having to recognise the box markup itself.
+func parseMobileBasic(htmlStr string) *mobileView {
+	v := &mobileView{boxes: make(map[string]string)}
+	if strings.TrimSpace(htmlStr) == "" {
+		return v
 	}
-	return -1
-}
-
-func byteToUTF16Index(s string, byteIdx int) int {
-	uLen := 0
-	for i, r := range s {
-		if i >= byteIdx {
-			break
-		}
-		if r >= 0x10000 {
-			uLen += 2
-		} else {
-			uLen += 1
-		}
-	}
-	return uLen
-}
-
-type paraInfo struct {
-	segs     []textSeg
-	paraText string
-}
-
-// ParseMobileBasicHTML parses the mobilebasic HTML and returns a map of mobile indexes
-// (e.g. "1", "2") to their footnote comments text, and the cleaned document body text
-// containing placeholders like "__CMNT_ANCHOR_1__" separated by newlines.
-func ParseMobileBasicHTML(htmlStr string) (map[string]string, string) {
-	footnotes := make(map[string]string)
-	var bodyBuilder strings.Builder
 
 	doc, err := nethtml.Parse(strings.NewReader(htmlStr))
 	if err != nil {
-		return footnotes, ""
+		log.Printf("Warning: mobilebasic HTML did not parse (%v); comments will not be anchored", err)
+		return v
 	}
 
-	isBlock := map[string]bool{
-		"p": true, "div": true, "h1": true, "h2": true, "h3": true, "h4": true,
-		"h5": true, "h6": true, "li": true, "tr": true, "br": true,
+	// Once the first box backlink is seen, all remaining text belongs to boxes.
+	var boxKey string
+	var box strings.Builder
+	closeBox := func() {
+		if boxKey != "" {
+			v.boxes[boxKey] = strings.TrimSpace(box.String())
+		}
+		box.Reset()
 	}
 
-	var traverse func(*nethtml.Node)
-	traverse = func(n *nethtml.Node) {
-		if n.Type == nethtml.ElementNode && n.Data == "div" {
-			// Check if this div is a comment footnote block
-			isFootnote := false
-			for _, attr := range n.Attr {
-				if attr.Key == "style" && strings.Contains(attr.Val, "border:1px solid black") {
-					isFootnote = true
-					break
+	var walk func(*nethtml.Node)
+	walk = func(n *nethtml.Node) {
+		switch {
+		case n.Type == nethtml.TextNode:
+			if boxKey != "" {
+				box.WriteString(n.Data)
+			} else {
+				for _, r := range n.Data {
+					v.text.add(r, 0)
 				}
 			}
-			if isFootnote {
-				cmntID, text := extractFootnoteInfo(n)
-				if cmntID != "" {
-					footnotes[cmntID] = text
-				}
-				return // Skip children to avoid duplicate text
+		case n.Type == nethtml.ElementNode && (n.Data == "script" || n.Data == "style"):
+			return
+		case n.Type == nethtml.ElementNode && n.Data == "a":
+			href := attrValue(n, "href")
+			switch {
+			case strings.HasPrefix(href, "#cmnt_ref"):
+				// Backlink opening a comment box: "[a]" label, then the body.
+				closeBox()
+				boxKey = attrValue(n, "id")
+				return
+			case strings.HasPrefix(href, "#cmnt"):
+				v.markers = append(v.markers, marker{
+					key:   strings.TrimPrefix(href, "#"),
+					order: len(v.markers),
+					pos:   v.text.len(),
+				})
+				return
+			case strings.HasPrefix(href, "#ftnt"):
+				// Footnote reference or backlink: the "[1]" label is not text.
+				return
 			}
 		}
-
-		if n.Type == nethtml.ElementNode && n.Data == "a" {
-			// Check if this is an inline comment anchor
-			var href string
-			for _, attr := range n.Attr {
-				if attr.Key == "href" {
-					href = attr.Val
-					break
-				}
-			}
-			if strings.HasPrefix(href, "#cmnt") && !strings.HasPrefix(href, "#cmnt_ref") {
-				cmntID := strings.TrimPrefix(href, "#cmnt")
-				bodyBuilder.WriteString("__CMNT_ANCHOR_" + cmntID + "__")
-				return // Skip "[a]" link text
-			}
-		}
-
-		if n.Type == nethtml.ElementNode && isBlock[n.Data] {
-			bodyBuilder.WriteByte('\n')
-		}
-
-		if n.Type == nethtml.TextNode {
-			bodyBuilder.WriteString(n.Data)
-		}
-
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			traverse(c)
-		}
-
-		if n.Type == nethtml.ElementNode && isBlock[n.Data] {
-			bodyBuilder.WriteByte('\n')
+			walk(c)
 		}
 	}
+	walk(doc)
+	closeBox()
 
-	traverse(doc)
-
-	// Clean and split lines
-	lines := strings.Split(bodyBuilder.String(), "\n")
-	var cleanedLines []string
-	for _, l := range lines {
-		trimmed := strings.TrimSpace(l)
-		if trimmed != "" {
-			cleanedLines = append(cleanedLines, trimmed)
-		}
-	}
-
-	return footnotes, strings.Join(cleanedLines, "\n")
+	return v
 }
 
-func extractFootnoteInfo(n *nethtml.Node) (string, string) {
-	var cmntID string
-	var sb strings.Builder
-
-	var collect func(*nethtml.Node)
-	collect = func(curr *nethtml.Node) {
-		if curr.Type == nethtml.ElementNode && curr.Data == "a" {
-			for _, attr := range curr.Attr {
-				if attr.Key == "id" && strings.HasPrefix(attr.Val, "cmnt") {
-					cmntID = strings.TrimPrefix(attr.Val, "cmnt")
-				}
-			}
-		}
-		if curr.Type == nethtml.TextNode {
-			sb.WriteString(curr.Data)
-		}
-		for c := curr.FirstChild; c != nil; c = c.NextSibling {
-			collect(c)
-		}
-	}
-	collect(n)
-
-	text := strings.TrimSpace(sb.String())
-	// Strip leading "[a]" or similar brackets
-	if strings.HasPrefix(text, "[") {
-		closeIdx := strings.Index(text, "]")
-		if closeIdx != -1 {
-			text = strings.TrimSpace(text[closeIdx+1:])
-		}
-	}
-	return cmntID, text
-}
-
-// BuildAnchorResultWithMobileBasic resolves comment offsets using mobilebasic HTML
-// as well as the Docs API structure.
-func BuildAnchorResultWithMobileBasic(body *docs.Body, comments []Comment, mobileBasicHTML string) AnchorResult {
-	res := AnchorResult{Offsets: make(map[int]string)}
-	if body == nil {
-		for _, c := range comments {
-			res.AmbiguousIDs = append(res.AmbiguousIDs, c.ID)
-		}
-		return res
-	}
-
-	// 1. Parse mobilebasic HTML
-	footnotes, cleanText := ParseMobileBasicHTML(mobileBasicHTML)
-
-	// 2. Map Comment ID <-> Mobile Index
-	commentToMobileIndex := make(map[string]string)
-	mobileIndexToCommentID := make(map[string]string)
-	for _, c := range comments {
-		if c.ID == "" {
-			continue
-		}
-		mIdx := matchCommentToFootnote(c, footnotes)
-		if mIdx != "" {
-			commentToMobileIndex[c.ID] = mIdx
-			mobileIndexToCommentID[mIdx] = c.ID
-		}
-	}
-
-	// 3. Build Docs API paragraphs
-	var apiParas []paraInfo
-	for _, elem := range body.Content {
-		if elem.Paragraph == nil {
-			continue
-		}
-		var segs []textSeg
-		var sb strings.Builder
-		for _, pe := range elem.Paragraph.Elements {
-			if pe.TextRun != nil && pe.TextRun.Content != "" {
-				segs = append(segs, textSeg{int(pe.StartIndex), pe.TextRun.Content})
-				sb.WriteString(pe.TextRun.Content)
-			}
-		}
-		apiParas = append(apiParas, paraInfo{segs, sb.String()})
-	}
-
-	// 4. Extract placeholder positions and map to API paragraphs
-	mobileParas := strings.Split(cleanText, "\n")
-	anchoredMap := make(map[string]int) // comment.ID -> absolute offset
-
-	// Perform sequence alignment of API paragraphs and mobile paragraphs
-	mobileToAPIMap := alignParagraphs(apiParas, mobileParas)
-
-	for j, mp := range mobileParas {
-		pids := findPlaceholders(mp)
-		if len(pids) == 0 {
-			continue
-		}
-
-		apiIdx, matched := mobileToAPIMap[j]
-		if !matched {
-			continue
-		}
-		ap := apiParas[apiIdx]
-
-		s1, placeholderIndices := parseParagraphPlaceholders(mp)
-		s2 := ap.paraText
-
-		runes1 := []rune(s1)
-		runes2 := []rune(s2)
-		alignment := alignRunes(runes1, runes2)
-
-		for pid, runeIdxInS1 := range placeholderIndices {
-			commentID, ok := mobileIndexToCommentID[pid]
-			if !ok {
-				continue
-			}
-
-			runeIdxInS2 := mapRuneIndex(runeIdxInS1, alignment, len(runes1), len(runes2))
-			byteIdxInS2 := runeToByteIndex(s2, runeIdxInS2)
-			abs := absOffset(ap.segs, byteIdxInS2)
-			if abs >= 0 {
-				anchoredMap[commentID] = abs
-			}
-		}
-	}
-
-	// 5. Finalize AnchorResult
-	type anchoredEntry struct {
-		offset int
-		id     string
-	}
-	var anchored []anchoredEntry
-
-	isAnchored := make(map[string]bool)
-	for id, offset := range anchoredMap {
-		res.Offsets[offset] = id
-		anchored = append(anchored, anchoredEntry{offset, id})
-		isAnchored[id] = true
-	}
-
-	// All comments that were not anchored via mobilebasic are classified as AmbiguousIDs
-	for _, c := range comments {
-		if !isAnchored[c.ID] {
-			res.AmbiguousIDs = append(res.AmbiguousIDs, c.ID)
-		}
-	}
-
-	// Sort in document order
-	sort.Slice(anchored, func(i, j int) bool { return anchored[i].offset < anchored[j].offset })
-	for _, e := range anchored {
-		res.AnchoredIDs = append(res.AnchoredIDs, e.id)
-	}
-
-	return res
-}
-
-func matchCommentToFootnote(comment Comment, footnotes map[string]string) string {
-	normComment := normalizeForMatching(comment.Content)
-	if normComment == "" {
-		return ""
-	}
-
-	for idx, fnText := range footnotes {
-		normFn := normalizeForMatching(fnText)
-		if strings.Contains(normFn, normComment) || strings.Contains(normComment, normFn) {
-			return idx
+func attrValue(n *nethtml.Node, name string) string {
+	for _, a := range n.Attr {
+		if a.Key == name {
+			return a.Val
 		}
 	}
 	return ""
 }
 
-func findPlaceholders(s string) []string {
-	var ids []string
-	i := 0
-	for i < len(s) {
-		if strings.HasPrefix(s[i:], "__CMNT_ANCHOR_") {
-			end := strings.Index(s[i+14:], "__")
-			if end != -1 {
-				ids = append(ids, s[i+14:i+14+end])
-				i += 14 + end + 2
-				continue
-			}
-		}
-		i++
-	}
-	return ids
-}
-
-func parseParagraphPlaceholders(s string) (string, map[string]int) {
-	var sb strings.Builder
-	placeholderIndices := make(map[string]int)
-
-	runes := []rune(s)
-	i := 0
-	for i < len(runes) {
-		if i <= len(runes)-14 && string(runes[i:i+14]) == "__CMNT_ANCHOR_" {
-			sub := runes[i+14:]
-			end := -1
-			for j := 0; j < len(sub)-1; j++ {
-				if sub[j] == '_' && sub[j+1] == '_' {
-					end = j
-					break
-				}
-			}
-			if end != -1 {
-				id := string(sub[:end])
-				placeholderIndices[id] = len([]rune(sb.String()))
-				i += 14 + end + 2
-				continue
-			}
-		}
-		sb.WriteRune(runes[i])
-		i++
-	}
-	return sb.String(), placeholderIndices
-}
-
-func findBestMatchingParagraph(mobilePara string, apiParas []paraInfo) int {
-	cleanMobile := removePlaceholders(mobilePara)
-	normMobile := normalizeForMatching(cleanMobile)
-	if normMobile == "" {
-		return -1
-	}
-
-	bestIdx := -1
-	maxOverlap := 0
-
-	for idx, ap := range apiParas {
-		normAPI := normalizeForMatching(ap.paraText)
-		if normAPI == "" {
+// assignMarkers pairs comment threads with the markers that point at them.
+//
+// The markers come in document order, and the boxes are in the matching order:
+// a thread's box is followed by one box per reply, plus the occasional box for a
+// reaction or a "marked as resolved" notice, all sharing the thread's position.
+// Consuming a thread's replies along with the thread keeps a reply from being
+// mistaken for a thread of its own, which matters when the reply says no more
+// than "+1" — a substring of half the threads in the document, and the source of
+// the mis-attributed anchors this replaced.
+func assignMarkers(v *mobileView, comments []Comment) map[string]marker {
+	byContent := make(map[string][]int, len(comments))
+	for i, c := range comments {
+		if c.ID == "" {
 			continue
 		}
-
-		overlap := wordOverlap(normMobile, normAPI)
-		if overlap > maxOverlap {
-			maxOverlap = overlap
-			bestIdx = idx
+		key := normalizeBoxText(c.Content)
+		if key == "" {
+			continue
 		}
+		byContent[key] = append(byContent[key], i)
 	}
 
-	// Require a minimal threshold of matching words
-	if maxOverlap < 1 {
+	claimed := make(map[int]bool, len(comments))
+	// unclaimedThread reports the comment a box starts a thread for, or -1.
+	unclaimedThread := func(boxText string) int {
+		for _, i := range byContent[boxText] {
+			if !claimed[i] {
+				return i
+			}
+		}
 		return -1
 	}
 
-	return bestIdx
-}
-
-func removePlaceholders(s string) string {
-	var sb strings.Builder
-	i := 0
-	for i < len(s) {
-		if strings.HasPrefix(s[i:], "__CMNT_ANCHOR_") {
-			end := strings.Index(s[i+14:], "__")
-			if end != -1 {
-				i += 14 + end + 2
-				continue
-			}
-		}
-		sb.WriteByte(s[i])
+	out := make(map[string]marker, len(comments))
+	for i := 0; i < len(v.markers); {
+		m := v.markers[i]
 		i++
-	}
-	return sb.String()
-}
 
-func normalizeForMatching(s string) string {
-	var sb strings.Builder
-	for _, r := range strings.ToLower(s) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == ' ' {
-			sb.WriteRune(r)
+		ci := unclaimedThread(normalizeBoxText(v.boxes[m.key]))
+		if ci < 0 {
+			continue
 		}
-	}
-	fields := strings.Fields(sb.String())
-	return strings.Join(fields, " ")
-}
+		claimed[ci] = true
+		out[comments[ci].ID] = m
 
-func wordOverlap(s1, s2 string) int {
-	w1 := strings.Fields(s1)
-	w2 := strings.Fields(s2)
-
-	m := make(map[string]bool)
-	for _, w := range w1 {
-		m[w] = true
-	}
-
-	overlap := 0
-	for _, w := range w2 {
-		if m[w] {
-			overlap++
-		}
-	}
-	return overlap
-}
-
-func alignRunes(r1, r2 []rune) map[int]int {
-	n1 := len(r1)
-	n2 := len(r2)
-
-	dp := make([][]int, n1+1)
-	for i := range dp {
-		dp[i] = make([]int, n2+1)
-	}
-
-	for i := 1; i <= n1; i++ {
-		for j := 1; j <= n2; j++ {
-			if r1[i-1] == r2[j-1] {
-				dp[i][j] = dp[i-1][j-1] + 1
-			} else {
-				dp[i][j] = maxInt(dp[i-1][j], dp[i][j-1])
+		pending := comments[ci].Replies
+		for i < len(v.markers) && len(pending) > 0 {
+			text := normalizeBoxText(v.boxes[v.markers[i].key])
+			expected := text == normalizeBoxText(pending[0].Content)
+			if !expected && unclaimedThread(text) >= 0 {
+				break // the next thread starts here
 			}
+			// Reading a box as the reply we expect, rather than as a thread of
+			// its own, is what keeps a "+1" reply from claiming a "+1" thread's
+			// anchor. Anything else here is a reaction or a status notice.
+			if expected {
+				pending = pending[1:]
+			}
+			i++
 		}
 	}
+	return out
+}
 
-	alignment := make(map[int]int)
-	i, j := n1, n2
-	for i > 0 && j > 0 {
-		if r1[i-1] == r2[j-1] {
-			alignment[i-1] = j-1
-			i--
-			j--
-		} else if dp[i-1][j] >= dp[i][j-1] {
-			i--
+// normalizeBoxText reduces comment text to lowercase words, so that a thread's
+// content compares equal to the box mobilebasic renders for it despite
+// differences in whitespace, entity escaping and stray markup.
+func normalizeBoxText(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
 		} else {
-			j--
+			b.WriteByte(' ')
 		}
 	}
-	return alignment
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
-func mapRuneIndex(posInS1 int, alignment map[int]int, lenS1, lenS2 int) int {
-	for r := posInS1; r < lenS1; r++ {
-		if idxS2, ok := alignment[r]; ok {
-			return idxS2
-		}
-	}
-	for l := posInS1 - 1; l >= 0; l-- {
-		if idxS2, ok := alignment[l]; ok {
-			return idxS2 + 1
-		}
-	}
-	return lenS2
+// alnumText holds the letters and digits of one rendering of a document, with a
+// back-map from each retained character to where it came from. Dropping
+// everything else lets two renderings be compared without having to agree on how
+// each spells a non-breaking space, a smart quote or a line break.
+type alnumText struct {
+	buf    []byte
+	starts []int // byte index in buf at which each retained character begins
+	after  []int // source position just past each retained character
+	runs   []span
 }
 
-func runeToByteIndex(s string, runeIdx int) int {
-	byteIdx := 0
-	for i, r := range s {
-		if runeIdx <= 0 {
-			break
-		}
-		byteIdx = i + len(string(r))
-		runeIdx--
+// span is a half-open offset range the converter is able to put a marker in.
+type span struct{ start, end int }
+
+func (a *alnumText) add(r rune, after int) {
+	if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+		return
 	}
-	return byteIdx
+	a.starts = append(a.starts, len(a.buf))
+	a.after = append(a.after, after)
+	a.buf = utf8.AppendRune(a.buf, r)
 }
 
-func maxInt(a, b int) int {
-	if a > b {
+func (a *alnumText) len() int { return len(a.starts) }
+
+// slice returns the retained characters in [from, to), clamped to the text.
+func (a *alnumText) slice(from, to int) []byte {
+	if from < 0 {
+		from = 0
+	}
+	if to > a.len() {
+		to = a.len()
+	}
+	if from >= to {
+		return nil
+	}
+	end := len(a.buf)
+	if to < a.len() {
+		end = a.starts[to]
+	}
+	return a.buf[a.starts[from]:end]
+}
+
+// contextWindows are the lengths, in retained characters, of the run of text
+// before a marker that locate tries to find in the body. Longest first, so that
+// a placement rests on as much agreeing text as it can get.
+var contextWindows = []int{512, 384, 256, 192, 128, 96, 64, 48, 32, 24, 16, 12, 8}
+
+// locate carries a position in the mobilebasic transcript over to a document
+// offset by searching the body for the text that precedes it.
+//
+// The context has to occur exactly once on both sides. A repeat in the body
+// would leave the destination ambiguous; a repeat in the transcript means the
+// same text appears elsewhere in the rendering — most often on another tab,
+// whose comments must not be placed in the tab being converted.
+func (a *alnumText) locate(mobile *alnumText, pos int) (int, bool) {
+	if a.len() == 0 {
+		return 0, false
+	}
+	for _, w := range contextWindows {
+		ctx := mobile.slice(pos-w, pos)
+		if len(ctx) == 0 {
+			continue
+		}
+		if bytes.Count(mobile.buf, ctx) != 1 || bytes.Count(a.buf, ctx) != 1 {
+			continue
+		}
+		// Anchor just past the context's last character, which is where the
+		// commented text ends.
+		end := bytes.Index(a.buf, ctx) + len(ctx)
+		return a.snap(a.after[sort.SearchInts(a.starts, end)-1]), true
+	}
+	return 0, false
+}
+
+// snap moves an offset into the nearest text run at or after it. An offset can
+// land between runs — a comment ending on the word right before a footnote
+// reference does exactly that — and the converter only emits markers from
+// inside a run, so an unsnapped offset would drop the comment silently.
+func (a *alnumText) snap(offset int) int {
+	if len(a.runs) == 0 {
+		return offset
+	}
+	i := sort.Search(len(a.runs), func(i int) bool { return a.runs[i].end > offset })
+	switch {
+	case i == len(a.runs):
+		return a.runs[len(a.runs)-1].end - 1
+	case offset < a.runs[i].start:
+		return a.runs[i].start
+	default:
+		return offset
+	}
+}
+
+// indexBody projects the body's text runs into an alnumText keyed by UTF-16
+// document offset. Only top-level paragraphs are indexed, because those are the
+// only places the converter can emit an anchor marker.
+func indexBody(body *docs.Body) *alnumText {
+	a := &alnumText{}
+	if body == nil {
 		return a
 	}
-	return b
-}
-
-func jaccardSimilarity(s1, s2 string) float64 {
-	norm1 := normalizeForMatching(s1)
-	norm2 := normalizeForMatching(s2)
-	if norm1 == "" || norm2 == "" {
-		return 0.0
-	}
-
-	w1 := strings.Fields(norm1)
-	w2 := strings.Fields(norm2)
-
-	set1 := make(map[string]bool)
-	for _, w := range w1 {
-		set1[w] = true
-	}
-	set2 := make(map[string]bool)
-	for _, w := range w2 {
-		set2[w] = true
-	}
-
-	intersectSize := 0
-	for w := range set1 {
-		if set2[w] {
-			intersectSize++
+	for _, el := range body.Content {
+		if el.Paragraph == nil {
+			continue
 		}
-	}
-
-	unionSize := len(set1) + len(set2) - intersectSize
-	if unionSize == 0 {
-		return 0.0
-	}
-
-	return float64(intersectSize) / float64(unionSize)
-}
-
-func alignParagraphs(apiParas []paraInfo, mobileParas []string) map[int]int {
-	n := len(apiParas)
-	m := len(mobileParas)
-
-	// dp[i][j] stores the max score for apiParas[0..i-1] and mobileParas[0..j-1]
-	dp := make([][]float64, n+1)
-	for i := range dp {
-		dp[i] = make([]float64, m+1)
-	}
-
-	// backtrack table
-	// Choices:
-	// 0: skip API (i-1)
-	// 1: skip Mobile (j-1)
-	// 2: match API (i-1) and Mobile (j-1)
-	choices := make([][]int, n+1)
-	for i := range choices {
-		choices[i] = make([]int, m+1)
-	}
-
-	for i := 1; i <= n; i++ {
-		for j := 1; j <= m; j++ {
-			// Option 1: skip API paragraph
-			score := dp[i-1][j]
-			choice := 0
-
-			// Option 2: skip Mobile paragraph
-			if dp[i][j-1] > score {
-				score = dp[i][j-1]
-				choice = 1
+		for _, pe := range el.Paragraph.Elements {
+			if pe.TextRun == nil {
+				continue
 			}
-
-			// Option 3: match API and Mobile paragraph
-			cleanMobile := removePlaceholders(mobileParas[j-1])
-			sim := jaccardSimilarity(apiParas[i-1].paraText, cleanMobile)
-			if sim >= 0.5 {
-				matchScore := dp[i-1][j-1] + sim
-				if matchScore > score {
-					score = matchScore
-					choice = 2
+			offset := int(pe.StartIndex)
+			// A comment's range ends after the punctuation that closes the
+			// text it covers, so let a retained character's end position run
+			// on over any punctuation directly behind it. Whitespace ends the
+			// run: a marker belongs to the sentence it comments on, not to the
+			// word that happens to start the next one.
+			adjacent := false
+			a.runs = append(a.runs, span{start: offset, end: offset + utf16Len(pe.TextRun.Content)})
+			for _, r := range pe.TextRun.Content {
+				next := offset + utf16RuneLen(r)
+				switch {
+				case unicode.IsLetter(r) || unicode.IsDigit(r):
+					a.add(r, next)
+					adjacent = true
+				case unicode.IsSpace(r):
+					adjacent = false
+				case adjacent:
+					a.after[a.len()-1] = next
 				}
+				offset = next
 			}
-
-			dp[i][j] = score
-			choices[i][j] = choice
 		}
 	}
-
-	// Backtrack to find the matching
-	alignment := make(map[int]int) // mobileParaIndex -> apiParaIndex
-	i, j := n, m
-	for i > 0 && j > 0 {
-		choice := choices[i][j]
-		if choice == 2 {
-			alignment[j-1] = i-1
-			i--
-			j--
-		} else if choice == 0 {
-			i--
-		} else {
-			j--
-		}
-	}
-
-	return alignment
+	return a
 }
 
+func utf16RuneLen(r rune) int {
+	if r >= 0x10000 {
+		return 2
+	}
+	return 1
+}
+
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		n += utf16RuneLen(r)
+	}
+	return n
+}

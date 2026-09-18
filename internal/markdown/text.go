@@ -70,7 +70,7 @@ func coalesceRuns(elements []*docs.ParagraphElement) []*docs.ParagraphElement {
 
 // convertElementsWithFootnotes processes paragraph elements with anchor and
 // footnote reference support. registerFootnote may be nil to skip footnotes.
-func convertElementsWithFootnotes(elements []*docs.ParagraphElement, anchors map[int]string, registerFootnote func(id string), registerComment func(id string)) string {
+func convertElementsWithFootnotes(elements []*docs.ParagraphElement, anchors map[int][]string, registerFootnote func(id string), registerComment func(id string)) string {
 	var builder strings.Builder
 	for _, element := range coalesceRuns(elements) {
 		if element.TextRun != nil {
@@ -292,23 +292,21 @@ func ConvertParagraphElements(elements []*docs.ParagraphElement) string {
 	return builder.String()
 }
 
-// convertParagraphElementsInternal is the anchor-aware version of ConvertParagraphElements.
-func convertParagraphElementsInternal(elements []*docs.ParagraphElement, anchors map[int]string) string {
-	if len(anchors) == 0 {
-		return ConvertParagraphElements(elements)
-	}
-	var builder strings.Builder
-	for _, element := range coalesceRuns(elements) {
-		if element.TextRun != nil {
-			builder.WriteString(textRunWithAnchors(element, anchors, nil))
+// anchorOffsetsIn returns the anchored offsets in [start, end), in order.
+func anchorOffsetsIn(anchors map[int][]string, start, end int) []int {
+	var offsets []int
+	for offset := range anchors {
+		if offset >= start && offset < end {
+			offsets = append(offsets, offset)
 		}
 	}
-	return builder.String()
+	sort.Ints(offsets)
+	return offsets
 }
 
 // textRunWithAnchors renders a text run, injecting HTML comment anchor markers
 // at any character offsets within the run that map to a comment ID.
-func textRunWithAnchors(pe *docs.ParagraphElement, anchors map[int]string, registerComment func(id string)) string {
+func textRunWithAnchors(pe *docs.ParagraphElement, anchors map[int][]string, registerComment func(id string)) string {
 	tr := pe.TextRun
 	if tr == nil || tr.Content == "" {
 		return ""
@@ -318,36 +316,27 @@ func textRunWithAnchors(pe *docs.ParagraphElement, anchors map[int]string, regis
 	content := tr.Content
 	cLen := utf16Len(content)
 
-	type anchorPos struct {
-		local int
-		id    string
-	}
-	var positions []anchorPos
-	for offset, id := range anchors {
-		if offset >= start && offset < start+cLen {
-			positions = append(positions, anchorPos{offset - start, id})
-		}
-	}
-
-	if len(positions) == 0 {
+	offsets := anchorOffsetsIn(anchors, start, start+cLen)
+	if len(offsets) == 0 {
 		return ApplyTextStyle(content, tr.TextStyle)
 	}
 
-	sort.Slice(positions, func(i, j int) bool { return positions[i].local < positions[j].local })
-
 	var result strings.Builder
 	prevUTF16 := 0
-	for _, pos := range positions {
-		if pos.local > prevUTF16 {
+	for _, offset := range offsets {
+		local := offset - start
+		if local > prevUTF16 {
 			prevByte := utf16ToByteIndex(content, prevUTF16)
-			posByte := utf16ToByteIndex(content, pos.local)
+			posByte := utf16ToByteIndex(content, local)
 			result.WriteString(ApplyTextStyle(content[prevByte:posByte], tr.TextStyle))
 		}
-		result.WriteString(fmt.Sprintf("<!-- gdoc-comment: %s -->", pos.id))
-		if registerComment != nil {
-			registerComment(pos.id)
+		for _, id := range anchors[offset] {
+			result.WriteString(fmt.Sprintf("<!-- gdoc-comment: %s -->", id))
+			if registerComment != nil {
+				registerComment(id)
+			}
 		}
-		prevUTF16 = pos.local
+		prevUTF16 = local
 	}
 	if prevUTF16 < cLen {
 		prevByte := utf16ToByteIndex(content, prevUTF16)

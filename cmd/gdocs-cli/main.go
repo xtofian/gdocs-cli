@@ -252,12 +252,10 @@ func run(docURL, credPath, accessTokenPath, filePath string, uploadComments, dry
 			converter.SetOpenCommentsOnly(true)
 		}
 
-		var mobileBasicHTML string
-		log.Println("Fetching mobilebasic HTML for precise comment placement...")
-		var mbErr error
-		mobileBasicHTML, mbErr = gdocs.FetchMobileBasicHTML(ctx, httpClient, docID)
+		log.Println("Fetching mobilebasic HTML for comment placement...")
+		mobileBasicHTML, mbErr := gdocs.FetchMobileBasicHTML(ctx, httpClient, docID)
 		if mbErr != nil {
-			log.Printf("Warning: failed to fetch mobilebasic HTML (%v); falling back to content-matching anchor placement", mbErr)
+			log.Printf("Warning: failed to fetch mobilebasic HTML (%v); comments will all be listed as unattached", mbErr)
 		}
 
 		converter.SetComments(filtered, mobileBasicHTML)

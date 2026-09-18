@@ -340,7 +340,7 @@ func TestConverterSections(t *testing.T) {
 						Elements: []*docs.ParagraphElement{
 							{StartIndex: 15, TextRun: &docs.TextRun{Content: "This is some text with footnote"}},
 							{FootnoteReference: &docs.FootnoteReference{FootnoteId: "fn-1"}},
-							{StartIndex: 48, TextRun: &docs.TextRun{Content: " and a comment"}},
+							{StartIndex: 48, TextRun: &docs.TextRun{Content: " and a comment\n"}},
 						},
 					},
 				},
@@ -398,8 +398,18 @@ func TestConverterSections(t *testing.T) {
 		},
 	}
 
+	mobileBasic := `<html><body>` +
+		`<h1>First Heading</h1>` +
+		`<p>This is some text with footnote<sup><a href="#ftnt1" id="ftnt_ref1">[1]</a></sup>` +
+		` and a comment<sup><a href="#cmnt1" id="cmnt_ref1">[a]</a></sup></p>` +
+		`<h1>Second Heading</h1>` +
+		`<p>This is some more text with footnote<sup><a href="#ftnt2" id="ftnt_ref2">[2]</a></sup>.</p>` +
+		`<div style="border:1px solid black"><p><a href="#cmnt_ref1" id="cmnt1">[a]</a>` +
+		`<span>A comment in first section</span></p></div>` +
+		`</body></html>`
+
 	c := NewConverter(doc)
-	c.SetComments(comments, "")
+	c.SetComments(comments, mobileBasic)
 	out, err := c.Convert()
 	if err != nil {
 		t.Fatalf("Convert() error: %v", err)
@@ -656,7 +666,7 @@ func TestCoalesceRunsSplitAtCommentAnchor(t *testing.T) {
 		{StartIndex: 1, TextRun: &docs.TextRun{Content: "Language choice ", TextStyle: &docs.TextStyle{Bold: true}}},
 		{StartIndex: 17, TextRun: &docs.TextRun{Content: "is among the best", TextStyle: &docs.TextStyle{Bold: true}}},
 	}
-	got := convertElementsWithFootnotes(elements, map[int]string{17: "c1"}, nil, func(string) {})
+	got := convertElementsWithFootnotes(elements, map[int][]string{17: {"c1"}}, nil, func(string) {})
 	want := "**Language choice** <!-- gdoc-comment: c1 -->**is among the best**"
 	if got != want {
 		t.Errorf("convertElementsWithFootnotes() = %q, want %q", got, want)

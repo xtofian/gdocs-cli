@@ -164,7 +164,7 @@ func TestConvertParagraph(t *testing.T) {
 				NamedStyleType: "HEADING_1",
 				HeadingId:      "h.test-id-123",
 			},
-			want:  "# My Heading {#h.test-id-123}\n\n",
+			want: "# My Heading {#h.test-id-123}\n\n",
 		},
 		{
 			name: "title with ID",
@@ -179,7 +179,7 @@ func TestConvertParagraph(t *testing.T) {
 				NamedStyleType: "TITLE",
 				HeadingId:      "h.title-id-456",
 			},
-			want:  "# My Title {#h.title-id-456}\n\n",
+			want: "# My Title {#h.title-id-456}\n\n",
 		},
 	}
 
@@ -449,9 +449,9 @@ func TestCodeBlocksAndTables(t *testing.T) {
 
 	converter := NewConverter(doc)
 	got := converter.convertBody()
-	
+
 	want := "```\nfunc main() {\n\n  println(\"hello\")\n```\n\nThis is some normal text.\n\n```\necho \"hello\"\n\necho \"world\"\n```\n\nEnd of script.\n\n```\nselect * from users;\n```\n\n"
-	
+
 	if got != want {
 		t.Errorf("convertBody() =\n%q\nwant =\n%q", got, want)
 	}

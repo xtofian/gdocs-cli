@@ -161,7 +161,20 @@ Use the `--comments` or `--comments=open` flag to include document comments in t
 ./gdocs-cli --url="..." --comments --comments-skip-older-than=30
 ```
 
-The tool uses sequence alignment via the document's mobilebasic view to precisely place comment anchors inline. Any comments that cannot be anchored inline (including open comments in `--comments=open` mode) are neatly appended under a single flat section: `## Comments (unattached)`.
+The tool places comment anchors inline by reading the document's mobilebasic
+view, which marks every open thread at the point it is anchored, and matching
+the text around each marker against the Docs API content. Any comments that
+cannot be placed — resolved threads, threads whose anchor text has been deleted,
+and threads anchored on another tab or inside a footnote — are appended under a
+single flat section: `## Comments (unattached)`.
+
+The Drive API cannot supply the positions directly: for Google Docs the `anchor`
+field is an opaque `kix.*` identifier, and `quotedFileContent` is frequently a
+single word (or a single period) that occurs all over the document. The Docs API
+does have a `commentsViewMode` parameter that returns comment ranges, but as of
+September 2026 it is limited to the [Workspace Developer Preview
+program](https://developers.google.com/workspace/preview); once it is generally
+available it should replace the mobilebasic path entirely.
 
 Each comment block is embedded as a clean, human-readable **YAML** block inside HTML comment tags:
 ```html

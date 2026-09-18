@@ -20,22 +20,15 @@ func ConvertSingleComment(c gdocs.Comment) string {
 }
 
 // ConvertComments renders comments as a markdown section for unattached comments.
-func ConvertComments(anchored, ambiguous, deleted []gdocs.Comment) string {
-	total := len(anchored) + len(ambiguous) + len(deleted)
-	if total == 0 {
+func ConvertComments(comments []gdocs.Comment) string {
+	if len(comments) == 0 {
 		return ""
 	}
 
 	var builder strings.Builder
 	builder.WriteString("## Comments (unattached)\n\n")
 
-	// Merge all of them into a single list
-	var all []gdocs.Comment
-	all = append(all, anchored...)
-	all = append(all, ambiguous...)
-	all = append(all, deleted...)
-
-	for _, c := range all {
+	for _, c := range comments {
 		builder.WriteString(ConvertSingleComment(c))
 		builder.WriteString("\n\n")
 	}
